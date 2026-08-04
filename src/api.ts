@@ -228,6 +228,108 @@ function graphToDataset(graph: NativeGraph): NetworkDataset {
   }
 }
 
+export interface CaptureInterface {
+  id: string
+  name: string
+}
+
+export interface TsharkInfo {
+  available: boolean
+  path?: string
+  message: string
+}
+
+export interface LiveCaptureSession {
+  sessionId: string
+  importId: string
+  interfaceId: string
+  interfaceName: string
+  status: string
+}
+
+export interface LiveCaptureUpdate {
+  sessionId: string
+  importId: string
+  status: string
+  packets: number
+  accepted: number
+  skipped: number
+  message?: string
+  dataset?: NetworkDataset
+}
+
+interface NativeLiveUpdate {
+  sessionId: string
+  importId: string
+  status: string
+  packets: number
+  accepted: number
+  skipped: number
+  message?: string
+  dataset?: NativeGraph
+}
+
+export async function listCaptureInterfaces(): Promise<{ tshark: TsharkInfo; interfaces: CaptureInterface[] }> {
+  if (!isTauri()) {
+    return {
+      tshark: { available: true, path: 'demo-tshark', message: 'Browser demo capture' },
+      interfaces: [
+        { id: '1', name: 'Demo Ethernet' },
+        { id: '2', name: 'Demo Wi-Fi' },
+      ],
+    }
+  }
+  return invoke<{ tshark: TsharkInfo; interfaces: CaptureInterface[] }>('list_capture_interfaces')
+}
+
+export async function startLiveCapture(interfaceId: string, bpfFilter = ''): Promise<LiveCaptureSession> {
+  if (!isTauri()) {
+    return {
+      sessionId: 'demo-live',
+      importId: 'demo-live',
+      interfaceId,
+      interfaceName: interfaceId === '2' ? 'Demo Wi-Fi' : 'Demo Ethernet',
+      status: 'capturing',
+    }
+  }
+  const project = await ensureProject()
+  return invoke<LiveCaptureSession>('start_live_capture', {
+    projectId: project.id,
+    interfaceId,
+    bpfFilter: bpfFilter.trim() || null,
+  })
+}
+
+export async function stopLiveCapture(): Promise<boolean> {
+  if (!isTauri()) return true
+  return invoke<boolean>('stop_live_capture')
+}
+
+export async function liveCaptureStatus(): Promise<LiveCaptureSession | null> {
+  if (!isTauri()) return null
+  return invoke<LiveCaptureSession | null>('live_capture_status')
+}
+
+export async function listenLiveCapture(
+  onUpdate: (update: LiveCaptureUpdate) => void,
+): Promise<() => void> {
+  if (!isTauri()) {
+    return () => undefined
+  }
+  return listen<NativeLiveUpdate>('live-capture-update', ({ payload }) => {
+    onUpdate({
+      sessionId: payload.sessionId,
+      importId: payload.importId,
+      status: payload.status,
+      packets: payload.packets,
+      accepted: payload.accepted,
+      skipped: payload.skipped,
+      message: payload.message,
+      dataset: payload.dataset ? graphToDataset(payload.dataset) : undefined,
+    })
+  })
+}
+
 export async function loadProjectDataset(): Promise<NetworkDataset | null> {
   if (!isTauri()) return null
   const project = await ensureProject()
@@ -384,7 +486,7 @@ export async function getDiagnostics(dataset: NetworkDataset): Promise<Diagnosti
   }
   return {
     mode: 'Browser demo',
-    version: '0.2.0',
+    version: '0.3.0',
     platform: navigator.platform || 'Browser',
     nodeCount: dataset.nodes.length,
     edgeCount: dataset.edges.length,

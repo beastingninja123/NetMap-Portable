@@ -2,6 +2,17 @@
 
 All notable changes to NetMap Portable are documented in this file.
 
+## 0.3.0 — 2026-08-04
+
+### Added
+- Investigation / Live workspace tabs
+- Live NIC capture via tshark (Wireshark CLI) with Start/Stop, adapter picker, and optional BPF filter
+- Real-time map updates from live capture batches (throttled, positions preserved)
+- Demo live stream when running in the browser without Tauri
+
+### Changed
+- Network map refreshes elements incrementally instead of remounting on every dataset change
+
 ## 0.2.0 — 2026-08-04
 
 ### Added

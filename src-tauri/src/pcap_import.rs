@@ -224,9 +224,9 @@ where
     })
 }
 
-struct DecodedPacket {
-    flow: FlowRecord,
-    hostnames: Vec<(String, String, Option<i64>)>,
+pub struct DecodedPacket {
+    pub flow: FlowRecord,
+    pub hostnames: Vec<(String, String, Option<i64>)>,
 }
 
 #[cfg(test)]
@@ -234,7 +234,7 @@ fn decode_packet(packet: &[u8], timestamp: Option<i64>) -> Option<FlowRecord> {
     decode_packet_with_hostnames(packet, timestamp).map(|decoded| decoded.flow)
 }
 
-fn decode_packet_with_hostnames(packet: &[u8], timestamp: Option<i64>) -> Option<DecodedPacket> {
+pub fn decode_packet_with_hostnames(packet: &[u8], timestamp: Option<i64>) -> Option<DecodedPacket> {
     let sliced = SlicedPacket::from_ethernet(packet).ok()?;
     let (source_ip, destination_ip, network_protocol) = match sliced.net? {
         NetSlice::Ipv4(ipv4) => (

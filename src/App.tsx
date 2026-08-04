@@ -6,14 +6,22 @@ import {
   getDiagnostics,
   importCapture,
   isTauri,
+  listCaptureInterfaces,
+  listenLiveCapture,
   loadProjectDataset,
   loadSavedViews,
   persistNodeMetadata,
   persistSavedView,
   previewCsv,
   renameProject,
+  startLiveCapture,
+  stopLiveCapture,
+  type CaptureInterface,
+  type LiveCaptureUpdate,
+  type TsharkInfo,
 } from './api'
 import { demoDataset } from './demoData'
+import { injectDemoLiveFlow } from './liveDemo'
 import NetworkMap, { type NetworkMapHandle } from './NetworkMap'
 import type {
   AggregatedEdge,
@@ -42,6 +50,7 @@ const defaultFilters: FilterState = {
 }
 
 type ImportStage = 'source' | 'mapping' | 'progress' | 'complete'
+type WorkspaceTab = 'investigation' | 'live'
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`
@@ -97,10 +106,27 @@ function App() {
   const [projectName, setProjectName] = useState('Branch Office Investigation')
   const [editingProjectName, setEditingProjectName] = useState(false)
   const [projectNameDraft, setProjectNameDraft] = useState('Branch Office Investigation')
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('investigation')
+  const [liveDataset, setLiveDataset] = useState<NetworkDataset>({ nodes: [], edges: [] })
+  const [mapLiveDataset, setMapLiveDataset] = useState<NetworkDataset>({ nodes: [], edges: [] })
+  const [captureInterfaces, setCaptureInterfaces] = useState<CaptureInterface[]>([])
+  const [tsharkInfo, setTsharkInfo] = useState<TsharkInfo | null>(null)
+  const [selectedInterfaceId, setSelectedInterfaceId] = useState('')
+  const [bpfFilter, setBpfFilter] = useState('')
+  const [liveStatus, setLiveStatus] = useState('idle')
+  const [livePackets, setLivePackets] = useState(0)
+  const [liveAccepted, setLiveAccepted] = useState(0)
+  const [liveSkipped, setLiveSkipped] = useState(0)
+  const [liveMessage, setLiveMessage] = useState('')
+  const [liveCapturing, setLiveCapturing] = useState(false)
+  const [liveStartedAt, setLiveStartedAt] = useState<number | null>(null)
+  const [liveClock, setLiveClock] = useState(0)
   const abortRef = useRef<AbortController | null>(null)
   const mapRef = useRef<NetworkMapHandle>(null)
   const metadataTimerRef = useRef<number | null>(null)
   const projectNameInputRef = useRef<HTMLInputElement>(null)
+  const liveThrottleRef = useRef<number | null>(null)
+  const demoLiveTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     void getActiveProject()
@@ -131,7 +157,62 @@ function App() {
     if (editingProjectName) projectNameInputRef.current?.focus()
   }, [editingProjectName])
 
-  const visible = useMemo(() => filterDataset(dataset, filters), [dataset, filters])
+  useEffect(() => {
+    if (!liveCapturing || liveStartedAt === null) return undefined
+    const timer = window.setInterval(() => setLiveClock(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [liveCapturing, liveStartedAt])
+
+  useEffect(() => {
+    let cancelled = false
+    void listCaptureInterfaces()
+      .then((result) => {
+        if (cancelled) return
+        setTsharkInfo(result.tshark)
+        setCaptureInterfaces(result.interfaces)
+        setSelectedInterfaceId((current) => current || result.interfaces[0]?.id || '')
+      })
+      .catch((error) => {
+        if (!cancelled) setLiveMessage(error instanceof Error ? error.message : String(error))
+      })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    void listenLiveCapture((update: LiveCaptureUpdate) => {
+      setLiveStatus(update.status)
+      setLivePackets(update.packets)
+      setLiveAccepted(update.accepted)
+      setLiveSkipped(update.skipped)
+      if (update.message) setLiveMessage(update.message)
+      const active = update.status === 'capturing' || update.status === 'starting' || update.status === 'stopping'
+      setLiveCapturing(active)
+      if (update.dataset) {
+        setLiveDataset(update.dataset)
+        if (liveThrottleRef.current !== null) window.clearTimeout(liveThrottleRef.current)
+        liveThrottleRef.current = window.setTimeout(() => {
+          setMapLiveDataset(update.dataset!)
+          liveThrottleRef.current = null
+        }, 1000)
+      }
+      if (update.status === 'complete' || update.status === 'cancelled' || update.status === 'failed') {
+        if (update.dataset) setMapLiveDataset(update.dataset)
+        void loadProjectDataset()
+          .then((stored) => { if (stored) setDataset(stored) })
+          .catch(() => undefined)
+      }
+    }).then((stop) => { unlisten = stop })
+    return () => {
+      unlisten?.()
+      if (liveThrottleRef.current !== null) window.clearTimeout(liveThrottleRef.current)
+      if (demoLiveTimerRef.current !== null) window.clearInterval(demoLiveTimerRef.current)
+    }
+  }, [])
+
+  const activeDataset = workspaceTab === 'live' ? liveDataset : dataset
+  const mapDataset = workspaceTab === 'live' ? mapLiveDataset : dataset
+  const visible = useMemo(() => filterDataset(mapDataset, filters), [filters, mapDataset])
   const aggregatedEdges = useMemo(() => aggregatePairEdges(visible.edges), [visible.edges])
   useEffect(() => {
     if (selectedNode && !visible.nodes.some((node) => node.id === selectedNode.id)) {
@@ -146,8 +227,8 @@ function App() {
     }
   }, [aggregatedEdges, expandedPairId, selectedAggregate, selectedEdge, selectedNode, visible])
   const nodeEdges = useMemo(
-    () => selectedNode ? summarizeNode(selectedNode, dataset) : [],
-    [dataset, selectedNode],
+    () => selectedNode ? summarizeNode(selectedNode, activeDataset) : [],
+    [activeDataset, selectedNode],
   )
   const connectionCount = filters.edgeMode === 'hidden'
     ? 0
@@ -185,6 +266,65 @@ function App() {
     }
   }, [])
   const onZoomChange = useCallback((zoom: number) => setZoomPercent(Math.round(zoom * 100)), [])
+
+  const beginDemoLiveStream = (interfaceId: string) => {
+    if (demoLiveTimerRef.current !== null) window.clearInterval(demoLiveTimerRef.current)
+    setLiveStartedAt(Date.now())
+    setLiveCapturing(true)
+    setLiveStatus('capturing')
+    setLiveMessage(`Demo capture on ${interfaceId === '2' ? 'Demo Wi-Fi' : 'Demo Ethernet'}`)
+    let tick = 0
+    demoLiveTimerRef.current = window.setInterval(() => {
+      tick += 1
+      setLiveDataset((current) => {
+        const next = injectDemoLiveFlow(current, tick)
+        if (tick % 2 === 0) setMapLiveDataset(next)
+        setLivePackets(tick * 12)
+        setLiveAccepted(next.edges.length)
+        setLiveSkipped(0)
+        return next
+      })
+    }, 700)
+  }
+
+  const handleStartLive = async () => {
+    setLiveMessage('')
+    setLivePackets(0)
+    setLiveAccepted(0)
+    setLiveSkipped(0)
+    setLiveDataset({ nodes: [], edges: [] })
+    setMapLiveDataset({ nodes: [], edges: [] })
+    try {
+      if (!isTauri()) {
+        beginDemoLiveStream(selectedInterfaceId || '1')
+        return
+      }
+      const session = await startLiveCapture(selectedInterfaceId, bpfFilter)
+      setLiveStartedAt(Date.now())
+      setLiveCapturing(true)
+      setLiveStatus(session.status)
+      setLiveMessage(`Capturing on ${session.interfaceName}`)
+    } catch (error) {
+      setLiveCapturing(false)
+      setLiveStatus('failed')
+      setLiveMessage(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const handleStopLive = async () => {
+    if (demoLiveTimerRef.current !== null) {
+      window.clearInterval(demoLiveTimerRef.current)
+      demoLiveTimerRef.current = null
+    }
+    try {
+      await stopLiveCapture()
+    } catch (error) {
+      setLiveMessage(error instanceof Error ? error.message : String(error))
+    }
+    setLiveCapturing(false)
+    setLiveStatus('stopped')
+    setLiveStartedAt(null)
+  }
 
   const openImporter = (kind: 'csv' | 'pcap') => {
     setImportKind(kind)
@@ -272,10 +412,13 @@ function App() {
   }
 
   const updateNodeMetadata = (changed: NetworkNode) => {
-    setDataset((current) => ({
+    const patch = (current: NetworkDataset): NetworkDataset => ({
       ...current,
       nodes: current.nodes.map((node) => node.id === changed.id ? changed : node),
-    }))
+    })
+    setDataset(patch)
+    setLiveDataset(patch)
+    setMapLiveDataset(patch)
     setSelectedNode(changed)
     if (metadataTimerRef.current !== null) window.clearTimeout(metadataTimerRef.current)
     metadataTimerRef.current = window.setTimeout(() => {
@@ -286,8 +429,12 @@ function App() {
 
   const edgePeer = (edge: NetworkEdge, node: NetworkNode): NetworkNode | undefined => {
     const peerId = edge.source === node.id ? edge.target : edge.source
-    return dataset.nodes.find((item) => item.id === peerId)
+    return activeDataset.nodes.find((item) => item.id === peerId)
   }
+
+  const liveElapsed = liveStartedAt
+    ? Math.max(0, Math.floor(((liveClock || Date.now()) - liveStartedAt) / 1000))
+    : 0
 
   const beginRenameProject = () => {
     setProjectNameDraft(projectName)
@@ -357,9 +504,78 @@ function App() {
         </div>
       </header>
 
+      <div className="workspace-tabs" role="tablist" aria-label="Workspace">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={workspaceTab === 'investigation'}
+          className={workspaceTab === 'investigation' ? 'active' : ''}
+          onClick={() => setWorkspaceTab('investigation')}
+        >
+          Investigation
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={workspaceTab === 'live'}
+          className={workspaceTab === 'live' ? 'active' : ''}
+          onClick={() => setWorkspaceTab('live')}
+        >
+          Live{liveCapturing ? ' · REC' : ''}
+        </button>
+      </div>
+
       <div className="workspace">
         <aside className="sidebar" aria-label="Project and filters">
           <div className="side-scroll">
+            {workspaceTab === 'live' ? (
+              <section className="side-section">
+                <div className="section-heading"><span>LIVE CAPTURE</span></div>
+                <p className={`live-tshark ${tsharkInfo?.available ? 'ok' : 'missing'}`}>
+                  {tsharkInfo?.message ?? 'Checking for tshark…'}
+                </p>
+                {tsharkInfo?.path && <p className="filter-help">{tsharkInfo.path}</p>}
+                <label>Interface
+                  <select
+                    value={selectedInterfaceId}
+                    disabled={liveCapturing}
+                    onChange={(event) => setSelectedInterfaceId(event.target.value)}
+                  >
+                    {captureInterfaces.length === 0 && <option value="">No adapters found</option>}
+                    {captureInterfaces.map((iface) => (
+                      <option key={iface.id} value={iface.id}>{iface.id}. {iface.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>BPF filter (optional)
+                  <input
+                    value={bpfFilter}
+                    disabled={liveCapturing}
+                    onChange={(event) => setBpfFilter(event.target.value)}
+                    placeholder="host 10.0.0.1 or port 53"
+                  />
+                </label>
+                <div className="import-buttons">
+                  {!liveCapturing ? (
+                    <button className="primary-live" disabled={!selectedInterfaceId || (isTauri() && !tsharkInfo?.available)} onClick={() => { void handleStartLive() }}>
+                      Start capture
+                    </button>
+                  ) : (
+                    <button className="danger-live" onClick={() => { void handleStopLive() }}>Stop capture</button>
+                  )}
+                </div>
+                <dl className="live-stats">
+                  <div><dt>Status</dt><dd>{liveStatus}</dd></div>
+                  <div><dt>Packets</dt><dd>{livePackets.toLocaleString()}</dd></div>
+                  <div><dt>Flows</dt><dd>{liveAccepted.toLocaleString()}</dd></div>
+                  <div><dt>Skipped</dt><dd>{liveSkipped.toLocaleString()}</dd></div>
+                  <div><dt>Elapsed</dt><dd>{liveCapturing ? `${liveElapsed}s` : '—'}</dd></div>
+                </dl>
+                {liveMessage && <p className="filter-help">{liveMessage}</p>}
+                <p className="filter-help">Requires Wireshark/tshark and Npcap. Run as Administrator if the adapter list is empty.</p>
+              </section>
+            ) : null}
+            {workspaceTab === 'investigation' ? (
             <section className="side-section">
               <div className="section-heading"><span>PROJECT</span><button className="text-button" onClick={() => openImporter('csv')}>＋ New</button></div>
               <div className="project-card">
@@ -398,6 +614,7 @@ function App() {
                 <button onClick={() => openImporter('pcap')}><Icon name="import" /> Select PCAP</button>
               </div>
             </section>
+            ) : null}
 
             <section className="side-section filters">
               <div className="section-heading"><span>FILTERS</span><button className="text-button" onClick={() => { setFilters(defaultFilters); setExpandedPairId(null); setSelectedAggregate(null) }}>Reset</button></div>
@@ -473,6 +690,7 @@ function App() {
               <label className="check"><input type="checkbox" checked={filters.hideNoise} onChange={(event) => updateFilter('hideNoise', event.target.checked)} /> Hide low-volume noise</label>
             </section>
 
+            {workspaceTab === 'investigation' ? (
             <section className="side-section">
               <div className="section-heading"><span>SAVED VIEWS</span><button className="text-button" onClick={saveView}>＋ Save</button></div>
               <div className="saved-list">
@@ -490,19 +708,21 @@ function App() {
                 ))}
               </div>
             </section>
+            ) : null}
           </div>
         </aside>
 
         <main className="main-panel">
           <div className="map-toolbar">
             <div>
-              <strong>Network topology</strong>
+              <strong>{workspaceTab === 'live' ? 'Live topology' : 'Network topology'}</strong>
               <span>
                 {visible.nodes.length} nodes · {connectionCount}{' '}
                 {filters.edgeMode === 'aggregate' ? 'links' : 'connections'}
                 {filters.edgeMode === 'aggregate' && visible.edges.length !== connectionCount
                   ? ` · ${visible.edges.length} flows`
                   : ''}
+                {workspaceTab === 'live' && liveCapturing ? ' · live' : ''}
               </span>
             </div>
             <div className="toolbar-actions">
@@ -554,7 +774,11 @@ function App() {
           />
           <div className="map-status">
             <span><i className="internal-dot" /> Internal host</span><span><i className="external-dot" /> External host</span>
-            <span className="map-hint">Scroll to zoom · Drag hosts to rearrange · Click a link for ports</span>
+            <span className="map-hint">
+              {workspaceTab === 'live'
+                ? 'Live map updates ~1/s · Drag hosts to rearrange · Click a link for ports'
+                : 'Scroll to zoom · Drag hosts to rearrange · Click a link for ports'}
+            </span>
           </div>
         </main>
 
@@ -569,7 +793,7 @@ function App() {
           ) : selectedAggregate ? (
             <AggregatedEdgeDetails
               edge={selectedAggregate}
-              nodes={dataset.nodes}
+              nodes={activeDataset.nodes}
               expanded={expandedPairId === selectedAggregate.id}
               onToggleExpand={() => setExpandedPairId((current) => (
                 current === selectedAggregate.id ? null : selectedAggregate.id
@@ -581,9 +805,17 @@ function App() {
               }}
             />
           ) : selectedEdge ? (
-            <EdgeDetails edge={selectedEdge} nodes={dataset.nodes} />
+            <EdgeDetails edge={selectedEdge} nodes={activeDataset.nodes} />
           ) : (
-            <div className="empty-details"><span>◎</span><h2>Inspect the map</h2><p>Select a host or connection to review its activity.</p></div>
+            <div className="empty-details">
+              <span>◎</span>
+              <h2>{workspaceTab === 'live' ? 'Live capture' : 'Inspect the map'}</h2>
+              <p>
+                {workspaceTab === 'live'
+                  ? 'Start a capture to watch hosts and flows appear in real time.'
+                  : 'Select a host or connection to review its activity.'}
+              </p>
+            </div>
           )}
         </aside>
       </div>
@@ -626,6 +858,11 @@ function App() {
                 <h3>Connection density</h3>
                 <p>By default NetMap draws <strong>one line per host pair</strong> instead of a line per port. Click a link to list every protocol/port in the details pane, then choose Expand ports on map when you need the fan-out. Switch Connections to Every port / flow only for small filtered sets. Use Links off or Hide connections when rearranging hubs.</p>
                 <p>Host scope can show internal IPs only or external IPs only. Pair that with traffic boundary filters and the visible pair/flow cap to keep large captures workable.</p>
+              </section>
+              <section>
+                <h3>Live capture</h3>
+                <p>Open the <strong>Live</strong> tab to capture from a NIC with Wireshark’s <code>tshark</code>. Choose an adapter, optionally add a BPF filter (for example <code>port 53</code> or <code>host 10.0.0.1</code>), then Start. Flows appear on the map about once per second and are saved into the current project.</p>
+                <p>Install Wireshark (includes tshark) and Npcap first. If no adapters appear, run NetMap as Administrator. Stop the capture before unplugging the interface. NetMap does not bundle Wireshark.</p>
               </section>
               <section>
                 <h3>Hostnames from captures</h3>

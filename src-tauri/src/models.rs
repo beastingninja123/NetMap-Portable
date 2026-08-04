@@ -63,6 +63,51 @@ pub struct ImportResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureInterface {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TsharkInfo {
+    pub available: bool,
+    pub path: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureInterfacesResponse {
+    pub tshark: TsharkInfo,
+    pub interfaces: Vec<CaptureInterface>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveCaptureSession {
+    pub session_id: String,
+    pub import_id: String,
+    pub interface_id: String,
+    pub interface_name: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveCaptureUpdate {
+    pub session_id: String,
+    pub import_id: String,
+    pub status: String,
+    pub packets: u64,
+    pub accepted: u64,
+    pub skipped: u64,
+    pub message: Option<String>,
+    pub dataset: Option<GraphResult>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphFilters {
@@ -107,6 +152,7 @@ pub struct GraphEdge {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GraphResult {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,

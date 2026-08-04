@@ -243,7 +243,7 @@ pub fn delete_import(connection: &mut Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
-fn rebuild_node_totals(connection: &Connection) -> Result<()> {
+pub fn rebuild_node_totals(connection: &Connection) -> Result<()> {
     connection.execute_batch(
         "UPDATE nodes SET
            total_bytes=COALESCE((SELECT sum(bytes) FROM flows WHERE source_node_id=nodes.id OR destination_node_id=nodes.id),0),

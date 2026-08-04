@@ -2,6 +2,7 @@ mod commands;
 mod csv_import;
 mod db;
 mod error;
+mod live_capture;
 mod models;
 mod pcap_import;
 mod storage;
@@ -55,6 +56,10 @@ pub fn run() {
             commands::list_views,
             commands::set_node_metadata,
             commands::export_filtered_csv,
+            commands::list_capture_interfaces,
+            commands::start_live_capture,
+            commands::stop_live_capture,
+            commands::live_capture_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running NetMap Portable");

@@ -24,7 +24,20 @@
 .icon-button { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--soft); }
 .icon-button:hover { background: var(--panel-3); color: var(--text); }
 
-.workspace { height: calc(100vh - 58px); display: grid; grid-template-columns: 258px minmax(400px,1fr) 300px; }
+.workspace-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); background: var(--panel); padding: 0 12px; }
+.workspace-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 10px 14px; font-size: 11px; font-weight: 600; letter-spacing: .2px; }
+.workspace-tabs button:hover { color: var(--text); }
+.workspace-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+.workspace { height: calc(100vh - 96px); display: grid; grid-template-columns: 258px minmax(400px,1fr) 300px; }
+.live-tshark { margin: 0 0 8px; font-size: 10px; line-height: 1.4; }
+.live-tshark.ok { color: var(--good); }
+.live-tshark.missing { color: var(--danger); }
+.live-stats { margin: 12px 0 0; }
+.live-stats div { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.live-stats dt { color: var(--muted); }
+.live-stats dd { margin: 0; font-weight: 600; }
+.primary-live { border: 1px solid var(--accent)!important; background: var(--accent)!important; color: #03131b!important; font-weight: 700; }
+.danger-live { border: 1px solid color-mix(in srgb,var(--danger) 50%,transparent)!important; background: color-mix(in srgb,var(--danger) 14%,transparent)!important; color: var(--danger)!important; font-weight: 700; }
 .sidebar,.details-pane { background: var(--panel); min-width: 0; }
 .sidebar { border-right: 1px solid var(--line); overflow: hidden; }
 .side-scroll,.details-pane { height: 100%; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }

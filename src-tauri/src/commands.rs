@@ -1,9 +1,11 @@
 use crate::csv_import;
 use crate::db;
 use crate::error::{require_existing_file, AppError, Result};
+use crate::live_capture::{self, LiveSession};
 use crate::models::{
-    CsvMapping, CsvPreview, Diagnostics, GraphFilters, GraphResult, ImportProgress, ImportResult,
-    ProjectInfo, SavedViewRecord,
+    CaptureInterfacesResponse, CsvMapping, CsvPreview, Diagnostics, GraphFilters, GraphResult,
+    ImportProgress, ImportResult, LiveCaptureSession, LiveCaptureUpdate, ProjectInfo,
+    SavedViewRecord,
 };
 use crate::pcap_import;
 use crate::storage::Storage;
@@ -16,6 +18,7 @@ use uuid::Uuid;
 pub struct AppState {
     pub storage: Storage,
     cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    live_session: Arc<Mutex<Option<LiveSession>>>,
 }
 
 impl AppState {
@@ -23,6 +26,7 @@ impl AppState {
         Self {
             storage,
             cancellations: Arc::new(Mutex::new(HashMap::new())),
+            live_session: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -331,4 +335,206 @@ pub async fn export_filtered_csv(
     .await
     .map_err(|error| AppError::Invalid(format!("export worker failed: {error}")))??;
     Ok(output_string)
+}
+
+fn request_stop_live(live_session: &Mutex<Option<LiveSession>>) -> Result<bool> {
+    let guard = live_session
+        .lock()
+        .map_err(|_| AppError::Invalid("live session registry is unavailable".into()))?;
+    if let Some(session) = guard.as_ref() {
+        session.cancel.store(true, Ordering::Relaxed);
+        if let Ok(mut child) = session.child.lock() {
+            if let Some(process) = child.as_mut() {
+                let _ = process.kill();
+            }
+        }
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub fn list_capture_interfaces() -> Result<CaptureInterfacesResponse> {
+    live_capture::list_interfaces()
+}
+
+#[tauri::command]
+pub fn live_capture_status(state: State<'_, AppState>) -> Result<Option<LiveCaptureSession>> {
+    let guard = state
+        .live_session
+        .lock()
+        .map_err(|_| AppError::Invalid("live session registry is unavailable".into()))?;
+    Ok(guard.as_ref().map(|session| LiveCaptureSession {
+        session_id: session.session_id.clone(),
+        import_id: session.import_id.clone(),
+        interface_id: session.interface_id.clone(),
+        interface_name: session.interface_name.clone(),
+        status: if session.cancel.load(Ordering::Relaxed) {
+            "stopping".into()
+        } else {
+            "capturing".into()
+        },
+    }))
+}
+
+#[tauri::command]
+pub fn stop_live_capture(state: State<'_, AppState>) -> Result<bool> {
+    request_stop_live(&state.live_session)
+}
+
+#[tauri::command]
+pub async fn start_live_capture(
+    app: AppHandle,
+    project_id: String,
+    interface_id: String,
+    bpf_filter: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<LiveCaptureSession> {
+    let _ = request_stop_live(&state.live_session)?;
+    // Give a previous worker a moment to release the NIC / DB row.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    let tshark = live_capture::find_tshark().ok_or_else(|| {
+        AppError::Invalid(
+            "tshark not found. Install Wireshark (includes tshark) and Npcap.".into(),
+        )
+    })?;
+    let listed = live_capture::list_interfaces()?;
+    let interface = live_capture::validate_interface_id(&interface_id, &listed.interfaces)?;
+    let bpf = live_capture::validate_bpf(bpf_filter.as_deref().unwrap_or(""))?;
+
+    let database = state.storage.database_path(&project_id)?;
+    let session_id = Uuid::new_v4().to_string();
+    let import_id = session_id.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let child_slot = Arc::new(Mutex::new(None));
+
+    {
+        let connection = db::open(&database)?;
+        db::start_import(
+            &connection,
+            &import_id,
+            "pcap",
+            &format!("live:{}", interface.name),
+        )?;
+    }
+
+    let mut child = live_capture::spawn_tshark(&tshark, &interface.id, bpf.as_deref())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::Invalid("tshark stdout was not captured".into()))?;
+    {
+        let mut slot = child_slot
+            .lock()
+            .map_err(|_| AppError::Invalid("live child lock failed".into()))?;
+        *slot = Some(child);
+    }
+
+    let session = LiveSession {
+        session_id: session_id.clone(),
+        import_id: import_id.clone(),
+        interface_id: interface.id.clone(),
+        interface_name: interface.name.clone(),
+        cancel: cancel.clone(),
+        child: child_slot.clone(),
+    };
+    {
+        let mut guard = state
+            .live_session
+            .lock()
+            .map_err(|_| AppError::Invalid("live session registry is unavailable".into()))?;
+        *guard = Some(session);
+    }
+
+    state
+        .cancellations
+        .lock()
+        .map_err(|_| AppError::Invalid("cancellation registry is unavailable".into()))?
+        .insert(import_id.clone(), cancel.clone());
+
+    let live_registry = state.live_session.clone();
+    let cancel_registry = state.cancellations.clone();
+    let worker_session = session_id.clone();
+    let worker_import = import_id.clone();
+    let worker_app = app.clone();
+
+    let _ = app.emit(
+        "live-capture-update",
+        LiveCaptureUpdate {
+            session_id: session_id.clone(),
+            import_id: import_id.clone(),
+            status: "starting".into(),
+            packets: 0,
+            accepted: 0,
+            skipped: 0,
+            message: Some(format!("Capturing on {}", interface.name)),
+            dataset: None,
+        },
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let emit_app = worker_app.clone();
+        let result = (|| {
+            let mut connection = db::open(&database)?;
+            live_capture::run_capture_loop(
+                &mut connection,
+                &worker_import,
+                &worker_session,
+                stdout,
+                cancel.as_ref(),
+                child_slot,
+                |update| {
+                    let _ = emit_app.emit("live-capture-update", update);
+                },
+            )
+        })();
+
+        if let Err(error) = &result {
+            if let Ok(connection) = db::open(&database) {
+                let _ = db::finish_import(
+                    &connection,
+                    &worker_import,
+                    0,
+                    0,
+                    "failed",
+                    Some(&error.to_string()),
+                );
+            }
+            let _ = worker_app.emit(
+                "live-capture-update",
+                LiveCaptureUpdate {
+                    session_id: worker_session.clone(),
+                    import_id: worker_import.clone(),
+                    status: "failed".into(),
+                    packets: 0,
+                    accepted: 0,
+                    skipped: 0,
+                    message: Some(error.to_string()),
+                    dataset: None,
+                },
+            );
+        }
+
+        if let Ok(mut guard) = live_registry.lock() {
+            if guard
+                .as_ref()
+                .is_some_and(|session| session.session_id == worker_session)
+            {
+                *guard = None;
+            }
+        }
+        if let Ok(mut registry) = cancel_registry.lock() {
+            registry.remove(&worker_import);
+        }
+    });
+
+    Ok(LiveCaptureSession {
+        session_id,
+        import_id,
+        interface_id: interface.id,
+        interface_name: interface.name,
+        status: "capturing".into(),
+    })
 }

@@ -21,6 +21,10 @@
     "allow-save-view",
     "allow-list-views",
     "allow-set-node-metadata",
-    "allow-export-filtered-csv"
+    "allow-export-filtered-csv",
+    "allow-list-capture-interfaces",
+    "allow-start-live-capture",
+    "allow-stop-live-capture",
+    "allow-live-capture-status"
   ]
 }

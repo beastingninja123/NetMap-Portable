@@ -133,6 +133,25 @@ function layoutOptions(name: string): LayoutOptions {
   }
 }
 
+function applyElements(cy: Core, elements: ElementDefinition[], preservePositions: boolean): void {
+  const positions = new Map<string, { x: number; y: number }>()
+  if (preservePositions) {
+    cy.nodes().forEach((node) => {
+      if (!node.hasClass('subnet')) positions.set(node.id(), { ...node.position() })
+    })
+  }
+  cy.batch(() => {
+    cy.elements().remove()
+    cy.add(elements)
+    if (preservePositions) {
+      cy.nodes().forEach((node) => {
+        const prior = positions.get(node.id())
+        if (prior) node.position(prior)
+      })
+    }
+  })
+}
+
 const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
   {
     dataset,
@@ -155,8 +174,18 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
   const tooltipRef = useRef<HTMLDivElement>(null)
   const datasetRef = useRef(dataset)
   const aggregatedRef = useRef(aggregatedEdges)
+  const onSelectNodeRef = useRef(onSelectNode)
+  const onSelectEdgeRef = useRef(onSelectEdge)
+  const onSelectAggregatedEdgeRef = useRef(onSelectAggregatedEdge)
+  const onZoomChangeRef = useRef(onZoomChange)
+  const readyRef = useRef(false)
+
   datasetRef.current = dataset
   aggregatedRef.current = aggregatedEdges
+  onSelectNodeRef.current = onSelectNode
+  onSelectEdgeRef.current = onSelectEdge
+  onSelectAggregatedEdgeRef.current = onSelectAggregatedEdge
+  onZoomChangeRef.current = onZoomChange
 
   useImperativeHandle(ref, () => ({
     fit: () => cyRef.current?.fit(undefined, 40),
@@ -194,8 +223,10 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
     },
   }), [layout])
 
+  // Remount only when layout/grouping changes (structural).
   useEffect(() => {
     if (!hostRef.current) return
+    readyRef.current = false
     const dense = dataset.edges.length > 80 || aggregatedEdges.length > 80
     const curveStyle = edgeMode === 'per-port' || dense ? 'haystack' : 'bezier'
     const cy = cytoscape({
@@ -277,31 +308,32 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
       ],
     })
     cyRef.current = cy
+    readyRef.current = true
 
-    cy.on('zoom', () => onZoomChange(cy.zoom()))
-    onZoomChange(cy.zoom())
+    cy.on('zoom', () => onZoomChangeRef.current(cy.zoom()))
+    onZoomChangeRef.current(cy.zoom())
     cy.on('tap', 'node', (event: EventObject) => {
       if (event.target.hasClass('subnet')) return
       const node = datasetRef.current.nodes.find((item) => item.id === event.target.id()) ?? null
-      onSelectNode(node)
+      onSelectNodeRef.current(node)
     })
     cy.on('tap', 'edge', (event: EventObject) => {
       const data = event.target.data()
       if (data.kind === 'aggregate') {
         const aggregate = aggregatedRef.current.find((item) => item.id === data.id) ?? null
-        onSelectAggregatedEdge(aggregate)
+        onSelectAggregatedEdgeRef.current(aggregate)
         return
       }
       const edge = datasetRef.current.edges.find((item) => item.id === data.id)
         ?? aggregatedRef.current.flatMap((item) => item.flows).find((item) => item.id === data.id)
         ?? null
-      onSelectEdge(edge)
+      onSelectEdgeRef.current(edge)
     })
     cy.on('tap', (event: EventObject) => {
       if (event.target === cy) {
-        onSelectNode(null)
-        onSelectEdge(null)
-        onSelectAggregatedEdge(null)
+        onSelectNodeRef.current(null)
+        onSelectEdgeRef.current(null)
+        onSelectAggregatedEdgeRef.current(null)
       }
     })
     cy.on('grab', 'node', (event: EventObject) => {
@@ -333,20 +365,34 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
     })
 
     return () => {
+      readyRef.current = false
       cy.destroy()
       cyRef.current = null
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remount only for layout / compound grouping
+  }, [groupSubnets, layout])
+
+  // Incremental element refresh — preserves pinned positions during live capture.
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy || !readyRef.current) return
+    const elements = elementsFor(
+      dataset,
+      groupSubnets,
+      showHostnames,
+      edgeMode,
+      showEdgeLabels,
+      aggregatedEdges,
+      expandedPairId,
+    )
+    // Always keep existing host positions so filter/live updates do not jump the graph.
+    applyElements(cy, elements, true)
   }, [
     aggregatedEdges,
     dataset,
     edgeMode,
     expandedPairId,
     groupSubnets,
-    layout,
-    onSelectAggregatedEdge,
-    onSelectEdge,
-    onSelectNode,
-    onZoomChange,
     showEdgeLabels,
     showHostnames,
   ])

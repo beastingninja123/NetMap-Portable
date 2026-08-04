@@ -219,6 +219,12 @@
           "markdownDescription": "Enables the import_pcap command without any pre-configured scope."
         },
         {
+          "description": "Enables the list_capture_interfaces command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-capture-interfaces",
+          "markdownDescription": "Enables the list_capture_interfaces command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_projects command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-projects",
@@ -229,6 +235,12 @@
           "type": "string",
           "const": "allow-list-views",
           "markdownDescription": "Enables the list_views command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the live_capture_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-live-capture-status",
+          "markdownDescription": "Enables the live_capture_status command without any pre-configured scope."
         },
         {
           "description": "Enables the open_project command without any pre-configured scope.",
@@ -265,6 +277,18 @@
           "type": "string",
           "const": "allow-set-node-metadata",
           "markdownDescription": "Enables the set_node_metadata command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_live_capture command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-live-capture",
+          "markdownDescription": "Enables the start_live_capture command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stop_live_capture command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stop-live-capture",
+          "markdownDescription": "Enables the stop_live_capture command without any pre-configured scope."
         },
         {
           "description": "Denies the cancel_import command without any pre-configured scope.",
@@ -309,6 +333,12 @@
           "markdownDescription": "Denies the import_pcap command without any pre-configured scope."
         },
         {
+          "description": "Denies the list_capture_interfaces command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-capture-interfaces",
+          "markdownDescription": "Denies the list_capture_interfaces command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_projects command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-projects",
@@ -319,6 +349,12 @@
           "type": "string",
           "const": "deny-list-views",
           "markdownDescription": "Denies the list_views command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the live_capture_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-live-capture-status",
+          "markdownDescription": "Denies the live_capture_status command without any pre-configured scope."
         },
         {
           "description": "Denies the open_project command without any pre-configured scope.",
@@ -355,6 +391,18 @@
           "type": "string",
           "const": "deny-set-node-metadata",
           "markdownDescription": "Denies the set_node_metadata command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_live_capture command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-live-capture",
+          "markdownDescription": "Denies the start_live_capture command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop_live_capture command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stop-live-capture",
+          "markdownDescription": "Denies the stop_live_capture command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

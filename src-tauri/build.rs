@@ -29,6 +29,10 @@ fn main() {
         "list_views",
         "set_node_metadata",
         "export_filtered_csv",
+        "list_capture_interfaces",
+        "start_live_capture",
+        "stop_live_capture",
+        "live_capture_status",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

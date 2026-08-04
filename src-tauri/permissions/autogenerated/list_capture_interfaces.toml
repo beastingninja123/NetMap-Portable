@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-capture-interfaces"
+description = "Enables the list_capture_interfaces command without any pre-configured scope."
+commands.allow = ["list_capture_interfaces"]
+
+[[permission]]
+identifier = "deny-list-capture-interfaces"
+description = "Denies the list_capture_interfaces command without any pre-configured scope."
+commands.deny = ["list_capture_interfaces"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stop-live-capture"
+description = "Enables the stop_live_capture command without any pre-configured scope."
+commands.allow = ["stop_live_capture"]
+
+[[permission]]
+identifier = "deny-stop-live-capture"
+description = "Denies the stop_live_capture command without any pre-configured scope."
+commands.deny = ["stop_live_capture"]

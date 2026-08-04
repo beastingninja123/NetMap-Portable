@@ -1,6 +1,6 @@
 [package]
 name = "netmap-portable"
-version = "0.2.0"
+version = "0.3.0"
 description = "Portable metadata-only network flow explorer"
 authors = ["NetMap contributors"]
 edition = "2021"
