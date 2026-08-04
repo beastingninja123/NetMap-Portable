@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-pcap"
+description = "Enables the import_pcap command without any pre-configured scope."
+commands.allow = ["import_pcap"]
+
+[[permission]]
+identifier = "deny-import-pcap"
+description = "Denies the import_pcap command without any pre-configured scope."
+commands.deny = ["import_pcap"]

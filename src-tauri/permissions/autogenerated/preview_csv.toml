@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-csv"
+description = "Enables the preview_csv command without any pre-configured scope."
+commands.allow = ["preview_csv"]
+
+[[permission]]
+identifier = "deny-preview-csv"
+description = "Denies the preview_csv command without any pre-configured scope."
+commands.deny = ["preview_csv"]

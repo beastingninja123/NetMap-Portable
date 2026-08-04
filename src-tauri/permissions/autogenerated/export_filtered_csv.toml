@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-filtered-csv"
+description = "Enables the export_filtered_csv command without any pre-configured scope."
+commands.allow = ["export_filtered_csv"]
+
+[[permission]]
+identifier = "deny-export-filtered-csv"
+description = "Denies the export_filtered_csv command without any pre-configured scope."
+commands.deny = ["export_filtered_csv"]

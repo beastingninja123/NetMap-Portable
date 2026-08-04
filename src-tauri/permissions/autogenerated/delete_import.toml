@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-import"
+description = "Enables the delete_import command without any pre-configured scope."
+commands.allow = ["delete_import"]
+
+[[permission]]
+identifier = "deny-delete-import"
+description = "Denies the delete_import command without any pre-configured scope."
+commands.deny = ["delete_import"]
