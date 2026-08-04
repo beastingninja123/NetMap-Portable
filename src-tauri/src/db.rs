@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS nodes (
   total_bytes INTEGER NOT NULL DEFAULT 0,
   total_packets INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS hostnames (
+  ip TEXT PRIMARY KEY,
+  hostname TEXT NOT NULL,
+  last_seen INTEGER
+);
 CREATE TABLE IF NOT EXISTS flows (
   id INTEGER PRIMARY KEY,
   source_node_id INTEGER NOT NULL REFERENCES nodes(id),
@@ -180,6 +185,26 @@ pub fn insert_batch(
     Ok(())
 }
 
+pub fn upsert_hostnames(
+    connection: &Connection,
+    observations: &[(String, String, Option<i64>)],
+) -> Result<()> {
+    let mut statement = connection.prepare_cached(
+        "INSERT INTO hostnames(ip,hostname,last_seen) VALUES(?1,?2,?3)
+         ON CONFLICT(ip) DO UPDATE SET
+           hostname=excluded.hostname,
+           last_seen=CASE
+             WHEN excluded.last_seen IS NULL THEN hostnames.last_seen
+             WHEN hostnames.last_seen IS NULL THEN excluded.last_seen
+             ELSE max(hostnames.last_seen,excluded.last_seen)
+           END",
+    )?;
+    for (ip, hostname, timestamp) in observations {
+        statement.execute(params![ip, hostname, timestamp])?;
+    }
+    Ok(())
+}
+
 pub fn finish_import(
     connection: &Connection,
     id: &str,
@@ -315,7 +340,8 @@ pub fn query_graph(connection: &Connection, filters: &GraphFilters) -> Result<Gr
     edges.truncate(limit as usize);
     let mut nodes_by_id = HashMap::new();
     let mut node_statement = connection.prepare(
-        "SELECT n.id,n.ip,n.ip_version,n.total_bytes,n.total_packets,
+        "SELECT n.id,n.ip,(SELECT h.hostname FROM hostnames h WHERE h.ip=n.ip),
+           n.ip_version,n.total_bytes,n.total_packets,
            (SELECT min(f.first_seen) FROM flows f WHERE f.source_node_id=n.id OR f.destination_node_id=n.id),
            (SELECT max(f.last_seen) FROM flows f WHERE f.source_node_id=n.id OR f.destination_node_id=n.id),
            COALESCE((SELECT json_group_array(name) FROM (
@@ -337,14 +363,15 @@ pub fn query_graph(connection: &Connection, filters: &GraphFilters) -> Result<Gr
                 Ok(GraphNode {
                     id: row.get(0)?,
                     ip: row.get(1)?,
-                    version: row.get(2)?,
-                    total_bytes: row.get(3)?,
-                    total_packets: row.get(4)?,
-                    first_seen: row.get(5)?,
-                    last_seen: row.get(6)?,
-                    imports: parse_json_list(row.get::<_, String>(7)?),
-                    tags: parse_json_list(row.get::<_, String>(8)?),
-                    notes: row.get(9)?,
+                    hostname: row.get(2)?,
+                    version: row.get(3)?,
+                    total_bytes: row.get(4)?,
+                    total_packets: row.get(5)?,
+                    first_seen: row.get(6)?,
+                    last_seen: row.get(7)?,
+                    imports: parse_json_list(row.get::<_, String>(8)?),
+                    tags: parse_json_list(row.get::<_, String>(9)?),
+                    notes: row.get(10)?,
                 })
             })
             .optional()?
@@ -476,10 +503,23 @@ mod tests {
             timestamp: Some(1),
         };
         insert_batch(&mut connection, "one", &[flow.clone(), flow]).unwrap();
+        upsert_hostnames(
+            &connection,
+            &[("10.0.0.1".into(), "workstation.lab".into(), Some(1))],
+        )
+        .unwrap();
         finish_import(&connection, "one", 2, 0, "complete", None).unwrap();
         let result = query_graph(&connection, &GraphFilters::default()).unwrap();
         assert_eq!(result.edges[0].bytes, 200);
         assert_eq!(result.nodes.len(), 2);
+        assert_eq!(
+            result
+                .nodes
+                .iter()
+                .find(|node| node.ip == "10.0.0.1")
+                .and_then(|node| node.hostname.as_deref()),
+            Some("workstation.lab")
+        );
 
         let node_id = result.nodes[0].id;
         set_node_metadata(

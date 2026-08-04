@@ -63,6 +63,22 @@ impl Storage {
         Ok(self.info(id, &name))
     }
 
+    pub fn rename_project(&self, id: &str, name: &str) -> Result<ProjectInfo> {
+        validate_project_id(id)?;
+        let display_name = name.trim();
+        if display_name.is_empty() || display_name.len() > 120 {
+            return Err(AppError::Invalid(
+                "project name must be between 1 and 120 characters".into(),
+            ));
+        }
+        let directory = self.root.join(id);
+        if !directory.is_dir() {
+            return Err(AppError::NotFound(format!("project {id}")));
+        }
+        fs::write(directory.join("name.txt"), display_name)?;
+        Ok(self.info(id, display_name))
+    }
+
     pub fn list_projects(&self) -> Result<Vec<ProjectInfo>> {
         let mut projects = Vec::new();
         for entry in fs::read_dir(&self.root)? {
@@ -179,5 +195,26 @@ mod tests {
     fn export_names_cannot_escape() {
         assert_eq!(sanitize_filename("../flows.csv").unwrap(), "flows.csv");
         assert!(sanitize_filename("bad.name.csv").is_err());
+    }
+
+    #[test]
+    fn rename_updates_display_name_file() {
+        let root = std::env::temp_dir().join(format!("netmap-rename-{}", uuid::Uuid::new_v4()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let storage = Storage {
+            root: root.clone(),
+            portable: false,
+        };
+        let project = storage.create_project("Original Name").unwrap();
+        let renamed = storage.rename_project(&project.id, "Renamed Case").unwrap();
+        assert_eq!(renamed.name, "Renamed Case");
+        assert_eq!(
+            fs::read_to_string(root.join(&project.id).join("name.txt"))
+                .unwrap()
+                .trim(),
+            "Renamed Case"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }

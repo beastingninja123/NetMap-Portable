@@ -44,6 +44,7 @@ pub fn run() {
             commands::create_project,
             commands::open_project,
             commands::list_projects,
+            commands::rename_project,
             commands::preview_csv,
             commands::import_csv,
             commands::import_pcap,

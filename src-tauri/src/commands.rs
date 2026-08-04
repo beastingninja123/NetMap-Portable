@@ -53,6 +53,15 @@ pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectInfo>> {
 }
 
 #[tauri::command]
+pub fn rename_project(
+    project_id: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<ProjectInfo> {
+    state.storage.rename_project(&project_id, &name)
+}
+
+#[tauri::command]
 pub async fn preview_csv(path: String) -> Result<CsvPreview> {
     let path = require_existing_file(&path, &["csv", "tsv"])?;
     tauri::async_runtime::spawn_blocking(move || csv_import::preview(&path))

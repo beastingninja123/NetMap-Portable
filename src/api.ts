@@ -71,6 +71,7 @@ interface NativeGraph {
   nodes: Array<{
     id: number
     ip: string
+    hostname?: string
     totalBytes: number
     totalPackets: number
     firstSeen?: number
@@ -114,6 +115,32 @@ async function ensureProject(): Promise<NativeProject> {
   const projects = await invoke<NativeProject[]>('list_projects')
   activeProject = projects[0] ?? await invoke<NativeProject>('create_project', { name: 'Branch Office Investigation' })
   return activeProject
+}
+
+export async function getActiveProject(): Promise<{ id: string; name: string }> {
+  if (!isTauri()) {
+    const name = localStorage.getItem('netmap-project-name') ?? 'Branch Office Investigation'
+    return { id: 'demo', name }
+  }
+  const project = await ensureProject()
+  return { id: project.id, name: project.name }
+}
+
+export async function renameProject(name: string): Promise<{ id: string; name: string }> {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('Project name cannot be empty')
+  if (trimmed.length > 120) throw new Error('Project name must be 120 characters or fewer')
+  if (!isTauri()) {
+    localStorage.setItem('netmap-project-name', trimmed)
+    return { id: 'demo', name: trimmed }
+  }
+  const project = await ensureProject()
+  const updated = await invoke<NativeProject>('rename_project', {
+    projectId: project.id,
+    name: trimmed,
+  })
+  activeProject = updated
+  return { id: updated.id, name: updated.name }
 }
 
 function optional(value: string): string | undefined {
@@ -173,8 +200,9 @@ function graphToDataset(graph: NativeGraph): NetworkDataset {
   return {
     nodes: graph.nodes.map((node) => ({
       id: String(node.id),
-      label: node.ip,
+      label: node.hostname ?? node.ip,
       ip: node.ip,
+      hostname: node.hostname,
       subnet: subnetFor(node.ip),
       kind: isInternal(node.ip) ? 'internal' : 'external',
       bytes: node.totalBytes,
@@ -356,7 +384,7 @@ export async function getDiagnostics(dataset: NetworkDataset): Promise<Diagnosti
   }
   return {
     mode: 'Browser demo',
-    version: '0.9.0-preview',
+    version: '0.2.0',
     platform: navigator.platform || 'Browser',
     nodeCount: dataset.nodes.length,
     edgeCount: dataset.edges.length,

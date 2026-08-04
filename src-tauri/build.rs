@@ -18,6 +18,7 @@ fn main() {
         "create_project",
         "open_project",
         "list_projects",
+        "rename_project",
         "preview_csv",
         "import_csv",
         "import_pcap",
@@ -25,6 +26,8 @@ fn main() {
         "query_graph",
         "delete_import",
         "save_view",
+        "list_views",
+        "set_node_metadata",
         "export_filtered_csv",
     ];
     tauri_build::try_build(

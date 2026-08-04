@@ -4,6 +4,7 @@ export interface NetworkNode {
   id: string
   label: string
   ip: string
+  hostname?: string
   subnet: string
   kind: 'internal' | 'external'
   bytes: number
@@ -27,6 +28,24 @@ export interface NetworkEdge {
   lastSeen: string
   imports: string[]
 }
+
+export interface AggregatedEdge {
+  id: string
+  source: string
+  target: string
+  bytes: number
+  packets: number
+  firstSeen: string
+  lastSeen: string
+  flowCount: number
+  ports: Array<{ protocol: Protocol; port: number; bytes: number; packets: number }>
+  protocols: Protocol[]
+  imports: string[]
+  flows: NetworkEdge[]
+}
+
+export type EdgeDisplayMode = 'hidden' | 'aggregate' | 'per-port'
+export type HostScope = 'all' | 'internal' | 'external'
 
 export interface NetworkDataset {
   nodes: NetworkNode[]
@@ -78,11 +97,14 @@ export interface FilterState {
   minBytes: number
   minPackets: number
   direction: 'all' | 'internal' | 'external' | 'cross-boundary'
+  hostScope: HostScope
   neighborhood: number
   hideIsolates: boolean
   hideNoise: boolean
   groupSubnets: boolean
   complexityCap: number
+  edgeMode: EdgeDisplayMode
+  showEdgeLabels: boolean
 }
 
 export interface SavedView {

@@ -20,6 +20,7 @@ export const demoDataset: NetworkDataset = {
     id: `n${index}`,
     label,
     ip,
+    hostname: label,
     subnet: ip.startsWith('10.') ? `${ip.split('.').slice(0, 3).join('.')}.0/24` : 'External',
     kind,
     bytes: 84_000 + index * 137_000,

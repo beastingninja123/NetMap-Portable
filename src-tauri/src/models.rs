@@ -80,6 +80,7 @@ pub struct GraphFilters {
 pub struct GraphNode {
     pub id: i64,
     pub ip: String,
+    pub hostname: Option<String>,
     pub version: i64,
     pub total_bytes: i64,
     pub total_packets: i64,

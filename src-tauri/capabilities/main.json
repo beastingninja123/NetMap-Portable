@@ -11,6 +11,7 @@
     "allow-create-project",
     "allow-open-project",
     "allow-list-projects",
+    "allow-rename-project",
     "allow-preview-csv",
     "allow-import-csv",
     "allow-import-pcap",
