@@ -11,6 +11,9 @@ Npcap, or a system-wide database.
 - Ethernet and VLAN traffic
 - IPv4 and IPv6 metadata
 - TCP, UDP, ICMP, and other IP protocol metadata
+- OT / ICS protocol names from analyzer exports, plus well-known-port inference
+  for Modbus, DNP3, EtherNet/IP, BACnet, OPC UA, S7comm, IEC 104, FINS, and
+  HART-IP when a capture only identifies TCP or UDP
 - Security Onion / ECS CSV (`source.ip`, `destination.ip`, ports, protocol,
   timestamps, bytes, and packets)
 - Zeek-style CSV (`id.orig_h`, `id.resp_h`, `id.orig_p`, `id.resp_p`)
@@ -18,6 +21,30 @@ Npcap, or a system-wide database.
 
 Only connection metadata is retained. Packet payloads are not stored or
 displayed.
+
+## Map interaction
+
+- Hover a host to keep its direct peers and second-hop paths prominent while
+  unrelated hosts and links fade.
+- Hostname and IP labels remain visible at low zoom with adaptive label sizing.
+- Use **Host spacing** to compact or spread the selected layout, then drag any
+  host to fine-tune its position.
+- Standard and OT / ICS protocols can be filtered independently or combined.
+- OT roles and IEC 62443-style security zones are inferred locally and can be
+  overridden per host. Cross-zone links can be highlighted as conduits.
+- Baseline analysis flags later host pairs, protocols, ports, and traffic
+  spikes; timeline playback reveals flows by their first-seen timestamp.
+- Hover tracing can follow both directions, outbound traffic, or inbound
+  traffic for two hops.
+
+## Offline OT lab captures
+
+Use **Test PCAP** in the Project panel to choose from two multi-host ICS lab
+captures (12 and 15 IP hosts) plus five focused protocol captures for
+Modbus/TCP, Siemens S7comm, DNP3, IEC 104, and HART-IP. The unmodified files
+live in `test-pcaps/` beside the portable executable and are copied into every
+USB build, so the chooser works offline.
+See `test-pcaps/SOURCES.md` for source links and SHA-256 verification guidance.
 
 ## Development
 
@@ -48,7 +75,7 @@ npm run portable
 ```
 
 The script creates `portable/NetMap-Portable/`, copies the release executable
-and fixed WebView2 runtime, creates an empty portable `data/projects/`
+and fixed WebView2 runtime, copies the offline `test-pcaps/` catalog, creates an empty portable `data/projects/`
 directory, and writes SHA-256 checksums. Copy the whole `NetMap-Portable`
 folder to the USB drive and launch `NetMap Portable.exe`.
 

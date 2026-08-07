@@ -6,6 +6,7 @@ import {
   getDiagnostics,
   importCapture,
   isTauri,
+  listTestCaptures,
   listCaptureInterfaces,
   listenLiveCapture,
   loadProjectDataset,
@@ -21,8 +22,20 @@ import {
   type TsharkInfo,
 } from './api'
 import { demoDataset } from './demoData'
+import {
+  analyzeBaseline,
+  ANOMALY_LABELS,
+  ASSET_ROLES,
+  datasetAtPercent,
+  datasetTimeBounds,
+  enrichAssetMetadata,
+  SECURITY_ZONES,
+  timeAtPercent,
+} from './insights'
 import { injectDemoLiveFlow } from './liveDemo'
 import NetworkMap, { type NetworkMapHandle } from './NetworkMap'
+import { ASSET_ROLE_HELP, CONTROL_HELP, PROTOCOL_HELP, ZONE_HELP } from './plainLanguageHelp'
+import { OT_PROTOCOLS, STANDARD_PROTOCOLS } from './protocols'
 import type {
   AggregatedEdge,
   CsvPreview,
@@ -35,13 +48,12 @@ import type {
   NetworkDataset,
   NetworkEdge,
   NetworkNode,
-  Protocol,
+  PathDirection,
   SavedView,
+  TestCapture,
 } from './types'
 import { aggregatePairEdges, downloadText, exportDatasetCsv, filterDataset, summarizeNode } from './utils'
 import { APP_VERSION } from './version'
-
-const protocols: Protocol[] = ['TCP', 'UDP', 'ICMP', 'DNS', 'HTTP', 'TLS', 'SSH']
 
 const defaultFilters: FilterState = {
   query: '', startTime: '', endTime: '', port: '', protocols: [], minBytes: 0, minPackets: 0,
@@ -76,6 +88,10 @@ function Icon({ name }: { name: string }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={paths[name]} /></svg>
 }
 
+function HelpHint({ text }: { text: string }) {
+  return <abbr className="help-hint" title={text} aria-label={`Plain-language help: ${text}`} tabIndex={0}>?</abbr>
+}
+
 function App() {
   const [dataset, setDataset] = useState<NetworkDataset>(demoDataset)
   const [filters, setFilters] = useState(defaultFilters)
@@ -94,6 +110,7 @@ function App() {
   const [progress, setProgress] = useState<ImportProgress | null>(null)
   const [importError, setImportError] = useState('')
   const [importSummary, setImportSummary] = useState('')
+  const [mergeWithExisting, setMergeWithExisting] = useState(false)
   const [savedViews, setSavedViews] = useState<SavedView[]>([
     { id: 'cross', name: 'Boundary traffic', filters: { ...defaultFilters, direction: 'cross-boundary' }, layout: 'cose' },
     { id: 'watch', name: 'Suspicious host ±1', filters: { ...defaultFilters, query: '185.220.101.42', neighborhood: 1 }, layout: 'breadthfirst' },
@@ -102,6 +119,18 @@ function App() {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [showHostnames, setShowHostnames] = useState(true)
+  const [nodeSpacing, setNodeSpacing] = useState(70)
+  const [groupZones, setGroupZones] = useState(false)
+  const [showConduits, setShowConduits] = useState(false)
+  const [showAnomalies, setShowAnomalies] = useState(false)
+  const [baselinePercent, setBaselinePercent] = useState(30)
+  const [pathDirection, setPathDirection] = useState<PathDirection>('both')
+  const [timelineEnabled, setTimelineEnabled] = useState(false)
+  const [timelinePercent, setTimelinePercent] = useState(100)
+  const [timelinePlaying, setTimelinePlaying] = useState(false)
+  const [testCaptureOpen, setTestCaptureOpen] = useState(false)
+  const [testCaptures, setTestCaptures] = useState<TestCapture[]>([])
+  const [testCaptureError, setTestCaptureError] = useState('')
   const [zoomPercent, setZoomPercent] = useState(100)
   const [projectName, setProjectName] = useState('Branch Office Investigation')
   const [editingProjectName, setEditingProjectName] = useState(false)
@@ -164,6 +193,20 @@ function App() {
   }, [liveCapturing, liveStartedAt])
 
   useEffect(() => {
+    if (!timelinePlaying) return undefined
+    const timer = window.setInterval(() => {
+      setTimelinePercent((current) => {
+        if (current >= 99) {
+          setTimelinePlaying(false)
+          return 100
+        }
+        return current + 1
+      })
+    }, 160)
+    return () => window.clearInterval(timer)
+  }, [timelinePlaying])
+
+  useEffect(() => {
     let cancelled = false
     void listCaptureInterfaces()
       .then((result) => {
@@ -210,10 +253,30 @@ function App() {
     }
   }, [])
 
-  const activeDataset = workspaceTab === 'live' ? liveDataset : dataset
-  const mapDataset = workspaceTab === 'live' ? mapLiveDataset : dataset
+  const rawActiveDataset = workspaceTab === 'live' ? liveDataset : dataset
+  const rawMapDataset = workspaceTab === 'live' ? mapLiveDataset : dataset
+  const activeDataset = useMemo(
+    () => analyzeBaseline(enrichAssetMetadata(rawActiveDataset), baselinePercent),
+    [baselinePercent, rawActiveDataset],
+  )
+  const analyzedMapDataset = useMemo(
+    () => analyzeBaseline(enrichAssetMetadata(rawMapDataset), baselinePercent),
+    [baselinePercent, rawMapDataset],
+  )
+  const timelineBounds = useMemo(() => datasetTimeBounds(analyzedMapDataset), [analyzedMapDataset])
+  const mapDataset = useMemo(
+    () => timelineEnabled ? datasetAtPercent(analyzedMapDataset, timelinePercent) : analyzedMapDataset,
+    [analyzedMapDataset, timelineEnabled, timelinePercent],
+  )
   const visible = useMemo(() => filterDataset(mapDataset, filters), [filters, mapDataset])
   const aggregatedEdges = useMemo(() => aggregatePairEdges(visible.edges), [visible.edges])
+  const resolvedSelectedNode = selectedNode
+    ? activeDataset.nodes.find((node) => node.id === selectedNode.id) ?? selectedNode
+    : null
+  const anomalousEdges = useMemo(
+    () => visible.edges.filter((edge) => edge.anomalies?.length),
+    [visible.edges],
+  )
   useEffect(() => {
     if (selectedNode && !visible.nodes.some((node) => node.id === selectedNode.id)) {
       setSelectedNode(null)
@@ -227,8 +290,8 @@ function App() {
     }
   }, [aggregatedEdges, expandedPairId, selectedAggregate, selectedEdge, selectedNode, visible])
   const nodeEdges = useMemo(
-    () => selectedNode ? summarizeNode(selectedNode, activeDataset) : [],
-    [activeDataset, selectedNode],
+    () => resolvedSelectedNode ? summarizeNode(resolvedSelectedNode, activeDataset) : [],
+    [activeDataset, resolvedSelectedNode],
   )
   const connectionCount = filters.edgeMode === 'hidden'
     ? 0
@@ -333,7 +396,33 @@ function App() {
     setMapping(null)
     setImportError('')
     setImportSummary('')
+    setMergeWithExisting(false)
     setImportStage('source')
+    setImportOpen(true)
+  }
+
+  const openTestCaptureChooser = async () => {
+    setTestCaptureError('')
+    setTestCaptureOpen(true)
+    try {
+      setTestCaptures(await listTestCaptures())
+    } catch (error) {
+      setTestCaptureError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const chooseTestCapture = (capture: TestCapture) => {
+    setTestCaptureOpen(false)
+    setImportKind('pcap')
+    setImportPaths([capture.path])
+    setPreview(null)
+    setMapping(null)
+    setImportError('')
+    setImportSummary('')
+    setMergeWithExisting(false)
+    setImportStage('source')
+    setShowAnomalies(false)
+    setShowConduits(false)
     setImportOpen(true)
   }
 
@@ -372,9 +461,12 @@ function App() {
     setImportStage('progress')
     setImportError('')
     try {
-      const result = await importCapture(importPaths, mapping, setProgress, controller.signal)
+      const result = await importCapture(importPaths, mapping, mergeWithExisting, setProgress, controller.signal)
       setDataset(result.dataset)
-      setImportSummary(`${result.importedRows.toLocaleString()} rows imported · ${result.skippedRows} skipped${result.warnings.length ? ` · ${result.warnings[0]}` : ''}`)
+      setFilters(defaultFilters)
+      setTimelinePercent(100)
+      setTimelinePlaying(false)
+      setImportSummary(`${result.importedRows.toLocaleString()} rows imported · ${result.skippedRows} skipped · ${mergeWithExisting ? 'merged with existing map' : 'replaced previous map'}${result.warnings.length ? ` · ${result.warnings[0]}` : ''}`)
       setImportStage('complete')
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -435,6 +527,7 @@ function App() {
   const liveElapsed = liveStartedAt
     ? Math.max(0, Math.floor(((liveClock || Date.now()) - liveStartedAt) / 1000))
     : 0
+  const timelineTimestamp = timeAtPercent(timelineBounds, timelinePercent)
 
   const beginRenameProject = () => {
     setProjectNameDraft(projectName)
@@ -535,7 +628,7 @@ function App() {
                   {tsharkInfo?.message ?? 'Checking for tshark…'}
                 </p>
                 {tsharkInfo?.path && <p className="filter-help">{tsharkInfo.path}</p>}
-                <label>Interface
+                <label>Interface <HelpHint text={CONTROL_HELP.interface} />
                   <select
                     value={selectedInterfaceId}
                     disabled={liveCapturing}
@@ -547,7 +640,7 @@ function App() {
                     ))}
                   </select>
                 </label>
-                <label>BPF filter (optional)
+                <label>BPF filter (optional) <HelpHint text={CONTROL_HELP.bpf} />
                   <input
                     value={bpfFilter}
                     disabled={liveCapturing}
@@ -612,31 +705,40 @@ function App() {
               <div className="import-buttons">
                 <button onClick={() => openImporter('csv')}><Icon name="import" /> Import CSV</button>
                 <button onClick={() => openImporter('pcap')}><Icon name="import" /> Select PCAP</button>
+                <button className="test-pcap-button" onClick={() => { void openTestCaptureChooser() }}><Icon name="map" /> Test PCAP</button>
               </div>
             </section>
             ) : null}
 
             <section className="side-section filters">
-              <div className="section-heading"><span>FILTERS</span><button className="text-button" onClick={() => { setFilters(defaultFilters); setExpandedPairId(null); setSelectedAggregate(null) }}>Reset</button></div>
+              <div className="section-heading">
+                <span>FILTERS</span>
+                <div className="section-actions">
+                  <button className="text-button" onClick={() => setHelpOpen(true)}>Plain guide</button>
+                  <button className="text-button" onClick={() => { setFilters(defaultFilters); setExpandedPairId(null); setSelectedAggregate(null) }}>Reset</button>
+                </div>
+              </div>
               <label className="search-field">
                 <span className="sr-only">Search IP prefixes, hostnames, or CIDR ranges</span>
                 <Icon name="search" />
-                <input value={filters.query} onChange={(event) => updateFilter('query', event.target.value)} placeholder="172., 192., 120." />
+                <input title={CONTROL_HELP.search} value={filters.query} onChange={(event) => updateFilter('query', event.target.value)} placeholder="IP, hostname, or CIDR" />
                 <kbd>⌘ K</kbd>
               </label>
-              <p className="filter-help">Comma-separate prefixes. Depth 0 shows only matching hosts.</p>
+              <p className="filter-help">Search IPs, names, or CIDR ranges. Comma-separate several values. <HelpHint text={CONTROL_HELP.search} /></p>
               <div className="field-grid">
-                <label>From<input type="datetime-local" value={filters.startTime} onChange={(event) => updateFilter('startTime', event.target.value)} /></label>
-                <label>To<input type="datetime-local" value={filters.endTime} onChange={(event) => updateFilter('endTime', event.target.value)} /></label>
+                <label>From <HelpHint text={CONTROL_HELP.time} /><input type="datetime-local" value={filters.startTime} onChange={(event) => updateFilter('startTime', event.target.value)} /></label>
+                <label>To <HelpHint text={CONTROL_HELP.time} /><input type="datetime-local" value={filters.endTime} onChange={(event) => updateFilter('endTime', event.target.value)} /></label>
               </div>
-              <label>Port<input value={filters.port} inputMode="numeric" onChange={(event) => updateFilter('port', event.target.value.replace(/\D/g, ''))} placeholder="Any port" /></label>
+              <label>Port <HelpHint text={CONTROL_HELP.port} /><input value={filters.port} inputMode="numeric" onChange={(event) => updateFilter('port', event.target.value.replace(/\D/g, ''))} placeholder="Any port" /></label>
               <fieldset>
-                <legend>Protocol</legend>
+                <legend>Protocol <HelpHint text={CONTROL_HELP.protocol} /></legend>
                 <div className="protocol-chips">
-                  {protocols.map((protocol) => (
+                  {STANDARD_PROTOCOLS.map((protocol) => (
                     <button
                       type="button"
                       key={protocol}
+                      title={PROTOCOL_HELP[protocol]}
+                      aria-label={`${protocol}: ${PROTOCOL_HELP[protocol]}`}
                       className={filters.protocols.includes(protocol) ? 'active' : ''}
                       onClick={() => updateFilter('protocols', filters.protocols.includes(protocol)
                         ? filters.protocols.filter((item) => item !== protocol)
@@ -645,24 +747,42 @@ function App() {
                   ))}
                 </div>
               </fieldset>
+              <fieldset>
+                <legend>OT / ICS protocol <HelpHint text={CONTROL_HELP.otProtocol} /></legend>
+                <div className="protocol-chips ot-protocol-chips">
+                  {OT_PROTOCOLS.map((protocol) => (
+                    <button
+                      type="button"
+                      key={protocol}
+                      title={PROTOCOL_HELP[protocol]}
+                      aria-label={`${protocol}: ${PROTOCOL_HELP[protocol]}`}
+                      className={filters.protocols.includes(protocol) ? 'active' : ''}
+                      onClick={() => updateFilter('protocols', filters.protocols.includes(protocol)
+                        ? filters.protocols.filter((item) => item !== protocol)
+                        : [...filters.protocols, protocol])}
+                    >{protocol}</button>
+                  ))}
+                </div>
+                <p className="filter-help">OT controls physical equipment; ICS means industrial control system. Hover a protocol for a plain-language definition.</p>
+              </fieldset>
               <div className="field-grid">
-                <label>Min bytes<input type="number" min="0" value={filters.minBytes} onChange={(event) => updateFilter('minBytes', Number(event.target.value))} /></label>
-                <label>Min packets<input type="number" min="0" value={filters.minPackets} onChange={(event) => updateFilter('minPackets', Number(event.target.value))} /></label>
+                <label>Min bytes <HelpHint text={CONTROL_HELP.minBytes} /><input type="number" min="0" value={filters.minBytes} onChange={(event) => updateFilter('minBytes', Number(event.target.value))} /></label>
+                <label>Min packets <HelpHint text={CONTROL_HELP.minPackets} /><input type="number" min="0" value={filters.minPackets} onChange={(event) => updateFilter('minPackets', Number(event.target.value))} /></label>
               </div>
-              <label>Host scope
+              <label>Host scope <HelpHint text={CONTROL_HELP.hostScope} />
                 <select value={filters.hostScope} onChange={(event) => updateFilter('hostScope', event.target.value as HostScope)}>
                   <option value="all">All hosts</option>
-                  <option value="internal">Internal IPs only</option>
-                  <option value="external">External IPs only</option>
+                  <option value="internal">Internal / private IPs only</option>
+                  <option value="external">External / public IPs only</option>
                 </select>
               </label>
-              <label>Traffic boundary
+              <label>Traffic boundary <HelpHint text={CONTROL_HELP.boundary} />
                 <select value={filters.direction} onChange={(event) => updateFilter('direction', event.target.value as FilterState['direction'])}>
-                  <option value="all">All traffic</option><option value="internal">Touches internal</option>
-                  <option value="external">Touches external</option><option value="cross-boundary">Cross-boundary only</option>
+                  <option value="all">All traffic</option><option value="internal">Touches internal / private</option>
+                  <option value="external">Touches external / public</option><option value="cross-boundary">Internal ↔ external only</option>
                 </select>
               </label>
-              <label>Connections
+              <label>Connections <HelpHint text={CONTROL_HELP.connections} />
                 <select value={filters.edgeMode} onChange={(event) => updateFilter('edgeMode', event.target.value as EdgeDisplayMode)}>
                   <option value="aggregate">One line per host pair</option>
                   <option value="per-port">Every port / flow</option>
@@ -676,23 +796,54 @@ function App() {
                     ? 'Draws every port separately — can lag on large captures.'
                     : 'Hosts stay visible; connection lines are hidden for faster dragging.'}
               </p>
-              <label>Include connected peers <output>depth {filters.neighborhood}</output>
+              <label>Host spacing <HelpHint text={CONTROL_HELP.spacing} /> <output>{nodeSpacing}</output>
+                <input
+                  type="range"
+                  min="35"
+                  max="180"
+                  step="5"
+                  value={nodeSpacing}
+                  onChange={(event) => setNodeSpacing(Number(event.target.value))}
+                />
+              </label>
+              <p className="filter-help">Lower values pull the map together. Drag any host to fine-tune its position.</p>
+              <label>Include connected peers <HelpHint text={CONTROL_HELP.neighborhood} /> <output>depth {filters.neighborhood}</output>
                 <input type="range" min="0" max="3" value={filters.neighborhood} onChange={(event) => updateFilter('neighborhood', Number(event.target.value))} />
               </label>
               <label>
-                {filters.edgeMode === 'per-port' ? 'Visible flow cap' : 'Visible pair cap'}
+                {filters.edgeMode === 'per-port' ? 'Visible flow cap' : 'Visible pair cap'} <HelpHint text={CONTROL_HELP.cap} />
                 <output>{filters.complexityCap}</output>
                 <input type="range" min="25" max="1000" step="25" value={filters.complexityCap} onChange={(event) => updateFilter('complexityCap', Number(event.target.value))} />
               </label>
-              <label className="check"><input type="checkbox" checked={filters.showEdgeLabels} onChange={(event) => updateFilter('showEdgeLabels', event.target.checked)} /> Show connection labels</label>
-              <label className="check"><input type="checkbox" checked={filters.groupSubnets} onChange={(event) => updateFilter('groupSubnets', event.target.checked)} /> Group by subnet</label>
-              <label className="check"><input type="checkbox" checked={filters.hideIsolates} onChange={(event) => updateFilter('hideIsolates', event.target.checked)} /> Hide isolated hosts</label>
-              <label className="check"><input type="checkbox" checked={filters.hideNoise} onChange={(event) => updateFilter('hideNoise', event.target.checked)} /> Hide low-volume noise</label>
+              <label className="check"><input type="checkbox" checked={filters.showEdgeLabels} onChange={(event) => updateFilter('showEdgeLabels', event.target.checked)} /> <span>Show connection labels <HelpHint text={CONTROL_HELP.edgeLabels} /></span></label>
+              <label className="check"><input type="checkbox" checked={filters.groupSubnets} onChange={(event) => { updateFilter('groupSubnets', event.target.checked); if (event.target.checked) setGroupZones(false) }} /> <span>Group by subnet <HelpHint text={CONTROL_HELP.subnet} /></span></label>
+              <label className="check"><input type="checkbox" checked={filters.hideIsolates} onChange={(event) => updateFilter('hideIsolates', event.target.checked)} /> <span>Hide isolated hosts <HelpHint text={CONTROL_HELP.isolates} /></span></label>
+              <label className="check"><input type="checkbox" checked={filters.hideNoise} onChange={(event) => updateFilter('hideNoise', event.target.checked)} /> <span>Hide low-volume noise <HelpHint text={CONTROL_HELP.noise} /></span></label>
+            </section>
+
+            <section className="side-section filters analysis-controls">
+              <div className="section-heading"><span>OT ANALYSIS</span><small>{anomalousEdges.length} flagged flows</small></div>
+              <p className="filter-help standards-explainer"><strong>IEC 62443</strong> is industrial cybersecurity guidance. A <strong>zone</strong> groups equipment needing similar protection; a <strong>conduit</strong> is a controlled path between zones. NetMap's assignments are suggestions, not a compliance assessment.</p>
+              <label>Hover path direction <HelpHint text={CONTROL_HELP.pathDirection} />
+                <select value={pathDirection} onChange={(event) => setPathDirection(event.target.value as PathDirection)}>
+                  <option value="both">Both directions</option>
+                  <option value="outbound">Outbound only</option>
+                  <option value="inbound">Inbound only</option>
+                </select>
+              </label>
+              <label className="check"><input type="checkbox" checked={groupZones} onChange={(event) => { setGroupZones(event.target.checked); if (event.target.checked) updateFilter('groupSubnets', false) }} /> <span>Group by IEC 62443 zone <HelpHint text={`${CONTROL_HELP.iec62443} ${CONTROL_HELP.zone}`} /></span></label>
+              <label className="check"><input type="checkbox" checked={showConduits} onChange={(event) => setShowConduits(event.target.checked)} /> <span>Highlight cross-zone conduits <HelpHint text={CONTROL_HELP.conduit} /></span></label>
+              <label className="check"><input type="checkbox" checked={showAnomalies} onChange={(event) => setShowAnomalies(event.target.checked)} /> <span>Highlight baseline anomalies <HelpHint text={CONTROL_HELP.anomalies} /></span></label>
+              <label>Baseline learning window <HelpHint text={CONTROL_HELP.baseline} /> <output>{baselinePercent}%</output>
+                <input type="range" min="10" max="60" step="5" value={baselinePercent} onChange={(event) => setBaselinePercent(Number(event.target.value))} />
+              </label>
+              <p className="filter-help">Learns early traffic, then flags new pairs, protocols, ports, and large volume changes.</p>
+              <label className="check"><input type="checkbox" checked={timelineEnabled} onChange={(event) => { setTimelineEnabled(event.target.checked); setTimelinePlaying(false); setTimelinePercent(event.target.checked ? 0 : 100) }} /> <span>Timeline playback by first seen <HelpHint text={CONTROL_HELP.timeline} /></span></label>
             </section>
 
             {workspaceTab === 'investigation' ? (
             <section className="side-section">
-              <div className="section-heading"><span>SAVED VIEWS</span><button className="text-button" onClick={saveView}>＋ Save</button></div>
+              <div className="section-heading"><span>SAVED VIEWS <HelpHint text={CONTROL_HELP.savedViews} /></span><button className="text-button" onClick={saveView}>＋ Save</button></div>
               <div className="saved-list">
                 {savedViews.map((view) => (
                   <button
@@ -712,7 +863,7 @@ function App() {
           </div>
         </aside>
 
-        <main className="main-panel">
+        <main className={`main-panel ${timelineEnabled ? 'timeline-open' : ''}`}>
           <div className="map-toolbar">
             <div>
               <strong>{workspaceTab === 'live' ? 'Live topology' : 'Network topology'}</strong>
@@ -726,7 +877,7 @@ function App() {
               </span>
             </div>
             <div className="toolbar-actions">
-              <label>Layout
+              <label>Layout <HelpHint text={CONTROL_HELP.layout} />
                 <select value={layout} onChange={(event) => setLayout(event.target.value)}>
                   <option value="cose">Force directed</option><option value="breadthfirst">Hierarchical</option>
                   <option value="circle">Circle</option><option value="grid">Grid</option>
@@ -735,25 +886,25 @@ function App() {
               <button onClick={() => mapRef.current?.zoomOut()} aria-label="Zoom out">−</button>
               <output className="zoom-level" aria-label="Current zoom">{zoomPercent}%</output>
               <button onClick={() => mapRef.current?.zoomIn()} aria-label="Zoom in">＋</button>
-              <button onClick={() => mapRef.current?.fit()}><Icon name="fit" /> Fit</button>
-              <button onClick={() => mapRef.current?.reset()}>↻ Reset</button>
+              <button title={CONTROL_HELP.fit} onClick={() => mapRef.current?.fit()}><Icon name="fit" /> Fit</button>
+              <button title={CONTROL_HELP.resetLayout} onClick={() => mapRef.current?.reset()}>↻ Reset</button>
               <button
                 className={filters.edgeMode !== 'hidden' ? 'active' : ''}
                 onClick={() => updateFilter('edgeMode', filters.edgeMode === 'hidden' ? 'aggregate' : 'hidden')}
-                title="Toggle connection lines"
+                title={CONTROL_HELP.links}
               >
                 {filters.edgeMode === 'hidden' ? 'Links off' : 'Links on'}
               </button>
               <button
                 className={showHostnames ? 'active' : ''}
                 onClick={() => setShowHostnames((current) => !current)}
-                title="Show or hide passive DNS hostnames"
+                title={CONTROL_HELP.names}
               >
                 {showHostnames ? 'Names on' : 'Names off'}
               </button>
               <div className="export-menu">
-                <button onClick={() => mapRef.current?.exportPng()}><Icon name="export" /> PNG</button>
-                <button onClick={() => downloadText('netmap-flows.csv', exportDatasetCsv(visible), 'text/csv;charset=utf-8')}>CSV</button>
+                <button title={CONTROL_HELP.png} onClick={() => mapRef.current?.exportPng()}><Icon name="export" /> PNG</button>
+                <button title={CONTROL_HELP.csv} onClick={() => downloadText('netmap-flows.csv', exportDatasetCsv(visible), 'text/csv;charset=utf-8')}>CSV</button>
               </div>
             </div>
           </div>
@@ -761,7 +912,12 @@ function App() {
             ref={mapRef}
             dataset={visible}
             layout={layout}
+            nodeSpacing={nodeSpacing}
             groupSubnets={filters.groupSubnets}
+            groupZones={groupZones}
+            showConduits={showConduits}
+            showAnomalies={showAnomalies}
+            pathDirection={pathDirection}
             showHostnames={showHostnames}
             edgeMode={filters.edgeMode}
             showEdgeLabels={filters.showEdgeLabels}
@@ -772,22 +928,36 @@ function App() {
             onSelectEdge={onSelectEdge}
             onSelectAggregatedEdge={onSelectAggregatedEdge}
           />
+          {timelineEnabled && (
+            <div className="timeline-bar" aria-label="Timeline playback controls">
+              <button
+                type="button"
+                onClick={() => {
+                  if (timelinePercent >= 100) setTimelinePercent(0)
+                  setTimelinePlaying((playing) => !playing)
+                }}
+              >{timelinePlaying ? 'Pause' : 'Play'}</button>
+              <button type="button" onClick={() => { setTimelinePlaying(false); setTimelinePercent(0) }}>Restart</button>
+              <input aria-label="Timeline position" type="range" min="0" max="100" value={timelinePercent} onChange={(event) => { setTimelinePlaying(false); setTimelinePercent(Number(event.target.value)) }} />
+              <output>{timelineTimestamp === null ? 'No timestamps' : new Date(timelineTimestamp).toLocaleString()} · {timelinePercent}%</output>
+            </div>
+          )}
           <div className="map-status">
             <span><i className="internal-dot" /> Internal host</span><span><i className="external-dot" /> External host</span>
             <span className="map-hint">
               {workspaceTab === 'live'
-                ? 'Live map updates ~1/s · Drag hosts to rearrange · Click a link for ports'
-                : 'Scroll to zoom · Drag hosts to rearrange · Click a link for ports'}
+                ? 'Live updates ~1/s · Hover a host to trace 2 hops · Drag hosts to rearrange'
+                : 'Hover a host to trace 2 hops · Scroll to zoom · Drag hosts to rearrange'}
             </span>
           </div>
         </main>
 
         <aside className="details-pane" aria-label="Selection details">
-          {selectedNode ? (
+          {resolvedSelectedNode ? (
             <NodeDetails
-              node={selectedNode}
+              node={resolvedSelectedNode}
               edges={nodeEdges}
-              peerFor={(edge) => edgePeer(edge, selectedNode)}
+              peerFor={(edge) => edgePeer(edge, resolvedSelectedNode)}
               onChange={updateNodeMetadata}
             />
           ) : selectedAggregate ? (
@@ -820,6 +990,15 @@ function App() {
         </aside>
       </div>
 
+      {testCaptureOpen && (
+        <TestCaptureDialog
+          captures={testCaptures}
+          error={testCaptureError}
+          onChoose={chooseTestCapture}
+          onClose={() => setTestCaptureOpen(false)}
+        />
+      )}
+
       {importOpen && (
         <ImportDialog
           stage={importStage}
@@ -830,10 +1009,12 @@ function App() {
           progress={progress}
           error={importError}
           summary={importSummary}
+          mergeWithExisting={mergeWithExisting}
           onClose={() => setImportOpen(false)}
           onSelect={selectNativeFiles}
           onBrowserFile={selectBrowserFile}
           onMapping={setMapping}
+          onMergeWithExisting={setMergeWithExisting}
           onNext={() => setImportStage(importKind === 'csv' ? 'mapping' : 'progress')}
           onImport={runImport}
           onCancel={() => abortRef.current?.abort()}
@@ -852,7 +1033,8 @@ function App() {
               </section>
               <section>
                 <h3>Navigate the map</h3>
-                <p>Use the mouse wheel or trackpad to zoom toward the pointer. The − and + buttons provide controlled zoom steps. Fit centers everything currently visible; Reset unlocks pinned hosts and reruns the selected layout. While dragging a host, connection lines fade so the map stays responsive.</p>
+                <p>Use the mouse wheel or trackpad to zoom toward the pointer. Labels scale up automatically as you zoom out. Fit centers everything currently visible; Reset reruns the selected layout. Use Host spacing to pull hosts together or spread them out, then drag any host to fine-tune its position.</p>
+                <p>Hover a host to emphasize its direct peers and their peers. Unrelated hosts and links fade so two-hop communication paths remain readable.</p>
               </section>
               <section>
                 <h3>Connection density</h3>
@@ -871,7 +1053,20 @@ function App() {
               </section>
               <section>
                 <h3>Filters and privacy</h3>
-                <p>Protocol, port, time, host scope, traffic direction, connection mode, and volume filters combine with the search. All parsing and project storage remain local beside the portable application.</p>
+                <p>Protocol, port, time, host scope, traffic direction, connection mode, and volume filters combine with the search. OT / ICS filters recognize explicit analyzer names and infer common protocols from well-known ports when only TCP or UDP is available.</p>
+                <p>All parsing and project storage remain local beside the portable application.</p>
+              </section>
+              <section>
+                <h3>Replace or merge imports</h3>
+                <p>New imports replace the current map by default, and the existing map is kept if parsing fails. Enable <strong>Merge with current map</strong> in the import dialog only when you want to combine multiple captures in one project.</p>
+              </section>
+              <section>
+                <h3>OT roles, zones, and conduits</h3>
+                <p>NetMap infers PLC, HMI, RTU, historian, gateway, controller, and workstation roles from hostnames and observed traffic. Select a host to override its role or IEC 62443-style zone. Group by zone and enable conduits to review cross-zone paths.</p>
+              </section>
+              <section>
+                <h3>Baseline and timeline</h3>
+                <p>The baseline window learns the early portion of the capture and flags later host pairs, protocols, ports, and traffic spikes. Timeline playback reveals flows according to their first-seen timestamp. Use Test PCAP to load an offline exercise designed for these controls.</p>
               </section>
             </div>
           </section>
@@ -904,6 +1099,7 @@ function NodeDetails({ node, edges, peerFor, onChange }: {
   const [tagDraft, setTagDraft] = useState('')
   const protocolsUsed = [...new Set(edges.map((edge) => edge.protocol))]
   const ports = [...new Set(edges.map((edge) => edge.port))].slice(0, 6)
+  const anomalyKinds = [...new Set(edges.flatMap((edge) => edge.anomalies ?? []))]
   return (
     <>
       <div className="details-header">
@@ -911,6 +1107,37 @@ function NodeDetails({ node, edges, peerFor, onChange }: {
         <div><span className="eyebrow">{node.kind} HOST</span><h2>{node.ip}</h2><p>{node.hostname ?? 'No hostname observed'}</p></div>
       </div>
       <div className="risk-banner"><span>Shielded</span><strong>{node.kind === 'internal' ? 'Internal asset' : 'External endpoint'}</strong></div>
+      <section className="detail-section asset-classification">
+        <h3>OT ASSET CLASSIFICATION</h3>
+        <label>Asset role <HelpHint text={`${CONTROL_HELP.assetRole} ${ASSET_ROLE_HELP[node.assetRole ?? 'Unknown']}`} />
+          <select
+            value={node.assetRoleSource === 'manual' ? node.assetRole : ''}
+            onChange={(event) => onChange(event.target.value
+              ? { ...node, assetRole: event.target.value as NetworkNode['assetRole'], assetRoleSource: 'manual' }
+              : { ...node, assetRole: undefined, assetRoleSource: undefined })}
+          >
+            <option value="">Auto-detect ({node.assetRole ?? 'Unknown'})</option>
+            {ASSET_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+          </select>
+        </label>
+        <label>IEC 62443 zone <HelpHint text={`${CONTROL_HELP.zone} ${ZONE_HELP[node.securityZone ?? 'Unassigned']}`} />
+          <select
+            value={node.securityZoneSource === 'manual' ? node.securityZone : ''}
+            onChange={(event) => onChange(event.target.value
+              ? { ...node, securityZone: event.target.value as NetworkNode['securityZone'], securityZoneSource: 'manual' }
+              : { ...node, securityZone: undefined, securityZoneSource: undefined })}
+          >
+            <option value="">Auto-assign ({node.securityZone ?? 'Unassigned'})</option>
+            {SECURITY_ZONES.map((zone) => <option key={zone} value={zone}>{zone}</option>)}
+          </select>
+        </label>
+      </section>
+      {anomalyKinds.length > 0 && (
+        <section className="detail-section anomaly-summary">
+          <h3>BASELINE FINDINGS</h3>
+          <div>{anomalyKinds.map((kind) => <span key={kind}>{ANOMALY_LABELS[kind]}</span>)}</div>
+        </section>
+      )}
       <section className="detail-section">
         <h3>TRAFFIC SUMMARY</h3>
         <div className="metric-grid">
@@ -946,12 +1173,43 @@ function NodeDetails({ node, edges, peerFor, onChange }: {
   )
 }
 
+function TestCaptureDialog({ captures, error, onChoose, onClose }: {
+  captures: TestCapture[]
+  error: string
+  onChoose: (capture: TestCapture) => void
+  onClose: () => void
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="modal test-capture-modal" role="dialog" aria-modal="true" aria-labelledby="test-capture-title" onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <div><span className="eyebrow">OFFLINE LAB DATA</span><h2 id="test-capture-title">Choose a recommended OT capture</h2></div>
+          <button className="icon-button" onClick={onClose} aria-label="Close"><Icon name="close" /></button>
+        </header>
+        <p className="test-capture-intro">These are real, unmodified Wireshark and Netresec training captures. The multi-host labs appear first. Every file ships beside the app for offline USB use.</p>
+        {error && <div className="error-box">{error}</div>}
+        <div className="test-capture-list">
+          {captures.map((capture) => (
+            <button type="button" key={capture.id} onClick={() => onChoose(capture)}>
+              <span className="test-capture-icon"><Icon name="map" /></span>
+              <span><strong>{capture.name}</strong><small>{capture.description}</small><em>{capture.protocols.join(' · ')}</em></span>
+              <b>Use capture ›</b>
+            </button>
+          ))}
+          {!error && captures.length === 0 && <p>Loading bundled captures…</p>}
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function EdgeDetails({ edge, nodes }: { edge: NetworkEdge; nodes: NetworkNode[] }) {
   const source = nodes.find((node) => node.id === edge.source)
   const target = nodes.find((node) => node.id === edge.target)
   return <div className="edge-details">
     <span className="eyebrow">DIRECTIONAL FLOW</span><h2>{edge.protocol}:{edge.port}</h2>
     <div className="flow-route"><strong>{source?.ip}</strong><span>→</span><strong>{target?.ip}</strong></div>
+    {edge.anomalies?.length ? <div className="edge-anomalies">{edge.anomalies.map((kind) => <span key={kind}>{ANOMALY_LABELS[kind]}</span>)}</div> : null}
     <dl><div><dt>Bytes</dt><dd>{formatBytes(edge.bytes)}</dd></div><div><dt>Packets</dt><dd>{edge.packets.toLocaleString()}</dd></div><div><dt>First seen</dt><dd>{formatTime(edge.firstSeen)}</dd></div><div><dt>Last seen</dt><dd>{formatTime(edge.lastSeen)}</dd></div></dl>
     <section className="detail-section source-list"><h3>SOURCE IMPORTS</h3>{edge.imports.map((sourceName) => <p key={sourceName}>▤ {sourceName}</p>)}</section>
   </div>
@@ -966,11 +1224,13 @@ function AggregatedEdgeDetails({ edge, nodes, expanded, onToggleExpand, onSelect
 }) {
   const source = nodes.find((node) => node.id === edge.source)
   const target = nodes.find((node) => node.id === edge.target)
+  const anomalies = [...new Set(edge.flows.flatMap((flow) => flow.anomalies ?? []))]
   return (
     <div className="edge-details">
       <span className="eyebrow">HOST PAIR LINK</span>
       <h2>{edge.flowCount} port{edge.flowCount === 1 ? '' : 's'}</h2>
       <div className="flow-route"><strong>{source?.ip}</strong><span>→</span><strong>{target?.ip}</strong></div>
+      {anomalies.length ? <div className="edge-anomalies">{anomalies.map((kind) => <span key={kind}>{ANOMALY_LABELS[kind]}</span>)}</div> : null}
       <dl>
         <div><dt>Total bytes</dt><dd>{formatBytes(edge.bytes)}</dd></div>
         <div><dt>Packets</dt><dd>{edge.packets.toLocaleString()}</dd></div>
@@ -1018,10 +1278,12 @@ function ImportDialog(props: {
   progress: ImportProgress | null
   error: string
   summary: string
+  mergeWithExisting: boolean
   onClose: () => void
   onSelect: () => void
   onBrowserFile: (file: File | undefined) => void
   onMapping: (mapping: ImportMapping) => void
+  onMergeWithExisting: (merge: boolean) => void
   onNext: () => void
   onImport: () => void
   onCancel: () => void
@@ -1048,6 +1310,15 @@ function ImportDialog(props: {
               : <label className="primary file-button">Browse files<input type="file" accept={props.kind === 'csv' ? '.csv,.tsv,.log' : '.pcap,.pcapng,.cap'} onChange={(event) => props.onBrowserFile(event.target.files?.[0])} /></label>}
           </div>
           {props.paths.length > 0 && <div className="selected-file"><span>▤</span><div><strong>{props.paths[0].split(/[\\/]/).at(-1)}</strong><small>{props.preview ? `${props.preview.rows.length}+ preview rows · ${props.preview.schema} detected` : 'Ready for local analysis'}</small></div><b>✓</b></div>}
+          <div className={`import-behavior ${props.mergeWithExisting ? 'merge' : 'replace'}`}>
+            <label className="check">
+              <input type="checkbox" checked={props.mergeWithExisting} onChange={(event) => props.onMergeWithExisting(event.target.checked)} />
+              Merge with current map
+            </label>
+            <p>{props.mergeWithExisting
+              ? 'Enabled: add these files to the hosts and flows already in this project.'
+              : 'Replace mode (default): after a successful import, only these selected files remain on the map.'}</p>
+          </div>
           {props.preview && <div className="preview-wrap"><div className="preview-heading"><strong>Data preview</strong><span>{props.preview.headers.length} columns</span></div><table><thead><tr>{props.preview.headers.slice(0, 5).map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{props.preview.rows.slice(0, 3).map((row, index) => <tr key={index}>{props.preview?.headers.slice(0, 5).map((header) => <td key={header}>{row[header]}</td>)}</tr>)}</tbody></table></div>}
           {props.error && <div className="error-box">{props.error}</div>}
           <footer><button onClick={props.onClose}>Cancel</button><button className="primary" disabled={!props.paths.length} onClick={props.kind === 'csv' ? props.onNext : props.onImport}>Continue</button></footer>

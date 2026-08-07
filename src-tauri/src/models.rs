@@ -134,6 +134,18 @@ pub struct GraphNode {
     pub imports: Vec<String>,
     pub tags: Vec<String>,
     pub notes: Option<String>,
+    pub asset_role: Option<String>,
+    pub security_zone: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCapture {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub protocols: Vec<String>,
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -4,6 +4,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import Papa from 'papaparse'
 import { demoDataset, sampleCsvRows } from './demoData'
 import type {
+  AssetRole,
   CsvPreview,
   Diagnostics,
   ImportMapping,
@@ -11,10 +12,12 @@ import type {
   ImportResult,
   NetworkDataset,
   NetworkNode,
-  Protocol,
   SavedView,
+  SecurityZone,
+  TestCapture,
 } from './types'
 import { createCsvPreview } from './utils'
+import { displayPort, normalizeProtocol } from './protocols'
 
 declare global {
   interface Window {
@@ -79,6 +82,8 @@ interface NativeGraph {
     imports: string[]
     tags: string[]
     notes?: string
+    assetRole?: string
+    securityZone?: string
   }>
   edges: Array<{
     id: number
@@ -173,12 +178,6 @@ function frontendMapping(mapping: NativeMapping | undefined): ImportMapping {
   }
 }
 
-function normalizeProtocol(value: string): Protocol {
-  const protocol = value.toUpperCase()
-  if (['TCP', 'UDP', 'ICMP', 'DNS', 'HTTP', 'TLS', 'SSH'].includes(protocol)) return protocol as Protocol
-  return 'OTHER'
-}
-
 function isInternal(ip: string): boolean {
   if (ip.startsWith('10.') || ip.startsWith('192.168.')) return true
   const match = /^172\.(\d+)\./.exec(ip)
@@ -212,19 +211,26 @@ function graphToDataset(graph: NativeGraph): NetworkDataset {
       imports: node.imports,
       tags: node.tags,
       notes: node.notes,
+      assetRole: node.assetRole as AssetRole | undefined,
+      assetRoleSource: node.assetRole ? 'manual' : undefined,
+      securityZone: node.securityZone as SecurityZone | undefined,
+      securityZoneSource: node.securityZone ? 'manual' : undefined,
     })),
-    edges: graph.edges.map((edge) => ({
-      id: String(edge.id),
-      source: String(edge.source),
-      target: String(edge.target),
-      protocol: normalizeProtocol(edge.protocol),
-      port: edge.destinationPort ?? edge.sourcePort ?? 0,
-      bytes: edge.bytes,
-      packets: edge.packets,
-      firstSeen: isoTime(edge.firstSeen),
-      lastSeen: isoTime(edge.lastSeen),
-      imports: [],
-    })),
+    edges: graph.edges.map((edge) => {
+      const protocol = normalizeProtocol(edge.protocol, edge.sourcePort, edge.destinationPort)
+      return {
+        id: String(edge.id),
+        source: String(edge.source),
+        target: String(edge.target),
+        protocol,
+        port: displayPort(protocol, edge.sourcePort, edge.destinationPort),
+        bytes: edge.bytes,
+        packets: edge.packets,
+        firstSeen: isoTime(edge.firstSeen),
+        lastSeen: isoTime(edge.lastSeen),
+        imports: [],
+      }
+    }),
   }
 }
 
@@ -368,7 +374,70 @@ export async function persistNodeMetadata(node: NetworkNode): Promise<void> {
     nodeId: Number(node.id),
     tags: node.tags,
     notes: node.notes ?? null,
+    assetRole: node.assetRoleSource === 'manual' ? node.assetRole ?? null : null,
+    securityZone: node.securityZoneSource === 'manual' ? node.securityZone ?? null : null,
   })
+}
+
+const browserTestCaptures: TestCapture[] = [
+  {
+    id: 'netresec-4sics-geek-lounge-2015-10-20',
+    name: '4SICS Multi-Host ICS Lab',
+    description: '15 IP hosts, 246k packets, 24.5 MB. Real PLC, RTU, gateway, firewall, switch, and workstation lab traffic.',
+    protocols: ['S7COMM', 'TCP', 'UDP', 'DNS'],
+    path: 'test-pcaps/netresec-4sics-geek-lounge-2015-10-20.pcap',
+  },
+  {
+    id: 'netresec-s4x15-bacnet-fiu',
+    name: 'S4x15 Multi-Host BACnet Lab',
+    description: '12 IP hosts, 101k packets, 10.2 MB. Real BACnet Internet and supporting ICS Village traffic.',
+    protocols: ['BACNET', 'TCP', 'UDP', 'HTTP'],
+    path: 'test-pcaps/netresec-s4x15-bacnet-fiu.pcap',
+  },
+  {
+    id: 'wireshark-modbus-tcp-float',
+    name: 'Wireshark Modbus/TCP Float',
+    description: 'A real Modbus/TCP request and response capture from Wireshark issue 7902.',
+    protocols: ['MODBUS'],
+    path: 'test-pcaps/wireshark-modbus-tcp-float.pcap',
+  },
+  {
+    id: 'wireshark-s7comm-plc-status',
+    name: 'Wireshark S7comm PLC Status',
+    description: 'A real Siemens S7 communication trace that reads PLC status.',
+    protocols: ['S7COMM'],
+    path: 'test-pcaps/wireshark-s7comm-plc-status.pcap',
+  },
+  {
+    id: 'wireshark-dnp3-select-operate',
+    name: 'Wireshark DNP3 Select/Operate',
+    description: 'A real DNP3 control exchange containing select and operate operations.',
+    protocols: ['DNP3'],
+    path: 'test-pcaps/wireshark-dnp3-select-operate.pcap',
+  },
+  {
+    id: 'wireshark-iec104',
+    name: 'Wireshark IEC-104',
+    description: 'A real IEC 60870-5-104 utility automation capture.',
+    protocols: ['IEC 104'],
+    path: 'test-pcaps/wireshark-iec104.pcap',
+  },
+  {
+    id: 'wireshark-hart-ip',
+    name: 'Wireshark HART-IP',
+    description: 'A real HART-IP capture containing TCP and UDP traffic.',
+    protocols: ['HART-IP'],
+    path: 'test-pcaps/wireshark-hart-ip.pcap',
+  },
+]
+
+export async function listTestCaptures(): Promise<TestCapture[]> {
+  if (!isTauri()) return browserTestCaptures
+  const captures = await invoke<TestCapture[]>('list_test_pcaps')
+  return captures.map((capture) => ({
+    ...capture,
+    protocols: capture.protocols.map((protocol) => normalizeProtocol(protocol)),
+  }))
 }
 
 export async function chooseFiles(kind: 'csv' | 'pcap'): Promise<string[]> {
@@ -406,6 +475,7 @@ export async function previewCsv(path: string, browserFile?: File): Promise<CsvP
 export async function importCapture(
   paths: string[],
   mapping: ImportMapping | null,
+  mergeWithExisting: boolean,
   onProgress: (progress: ImportProgress) => void,
   signal: AbortSignal,
 ): Promise<ImportResult> {
@@ -414,6 +484,8 @@ export async function importCapture(
     let currentImportId = ''
     let accepted = 0
     let skipped = 0
+    let importsFinalized = false
+    const completedImportIds: string[] = []
     const warnings: string[] = []
     const unlisten = await listen<NativeProgress>('import-progress', ({ payload }) => {
       currentImportId = payload.importId
@@ -439,11 +511,23 @@ export async function importCapture(
           path,
           ...(command === 'import_csv' && mapping ? { mapping: nativeMapping(mapping) } : {}),
         })
+        completedImportIds.push(result.importId)
         accepted += result.accepted
         skipped += result.skipped
         warnings.push(...result.warnings)
         if (result.cancelled || signal.aborted) throw new DOMException('Import cancelled', 'AbortError')
       }
+      if (accepted === 0) {
+        throw new Error('No supported IP traffic was found. The current map was left unchanged.')
+      }
+      if (!mergeWithExisting) {
+        onProgress({ phase: 'Replacing current map', percent: 98, processed: accepted, total: accepted })
+        await invoke('retain_imports', {
+          projectId: project.id,
+          importIds: completedImportIds,
+        })
+      }
+      importsFinalized = true
       const graph = await invoke<NativeGraph>('query_graph', {
         projectId: project.id,
         filters: { limit: 5000 },
@@ -454,6 +538,14 @@ export async function importCapture(
         warnings: graph.truncated ? [...warnings, 'The map was limited to the 5,000 busiest flows.'] : warnings,
         dataset: graphToDataset(graph),
       }
+    } catch (error) {
+      if (!importsFinalized) {
+        await Promise.allSettled(completedImportIds.map((importId) => invoke('delete_import', {
+          projectId: project.id,
+          importId,
+        })))
+      }
+      throw error
     } finally {
       signal.removeEventListener('abort', cancel)
       unlisten()
@@ -486,7 +578,7 @@ export async function getDiagnostics(dataset: NetworkDataset): Promise<Diagnosti
   }
   return {
     mode: 'Browser demo',
-    version: '0.3.0',
+    version: '0.4.0',
     platform: navigator.platform || 'Browser',
     nodeCount: dataset.nodes.length,
     edgeCount: dataset.edges.length,

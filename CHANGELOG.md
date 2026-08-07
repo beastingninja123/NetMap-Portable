@@ -2,6 +2,38 @@
 
 All notable changes to NetMap Portable are documented in this file.
 
+## 0.4.0 — 2026-08-07
+
+### Added
+- OT / ICS protocol filtering and well-known-port inference for Modbus, DNP3,
+  EtherNet/IP, BACnet, OPC UA, S7comm, IEC 104, FINS, and HART-IP
+- Inferred and manually assignable OT asset roles and IEC 62443-style security
+  zones, with optional zone grouping and cross-zone conduit highlighting
+- Baseline anomaly detection for new host pairs, protocols, ports, and traffic
+  spikes, plus first-seen timeline playback
+- Direction-aware two-hop hover tracing for inbound, outbound, or bidirectional
+  communication paths
+- Adjustable host spacing, persistent drag positions, adaptive labels, and
+  plain-language help throughout the analysis controls
+- Offline **Test PCAP** chooser with seven bundled Wireshark and Netresec OT
+  training captures, source attribution, and SHA-256 verification details
+- Import mode control to replace the current map safely or merge new captures
+  into it
+
+### Fixed
+- Clearing a protocol filter no longer makes restored hosts disappear or lose
+  their saved positions
+- Initial maps now run a real layout instead of stacking every host at one point
+- Failed, cancelled, and zero-flow imports leave the current map unchanged
+- Linux cooked-capture packets in bundled PCAPs are now decoded alongside
+  Ethernet packets
+
+### Changed
+- Graph updates synchronize elements incrementally and preserve positions across
+  filtering and timeline changes
+- Portable builds copy the complete offline PCAP catalog beside the executable
+  and include it in the generated checksum manifest
+
 ## 0.3.0 — 2026-08-04
 
 ### Added

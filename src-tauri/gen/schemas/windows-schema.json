@@ -231,6 +231,12 @@
           "markdownDescription": "Enables the list_projects command without any pre-configured scope."
         },
         {
+          "description": "Enables the list_test_pcaps command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-test-pcaps",
+          "markdownDescription": "Enables the list_test_pcaps command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_views command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-views",
@@ -265,6 +271,12 @@
           "type": "string",
           "const": "allow-rename-project",
           "markdownDescription": "Enables the rename_project command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the retain_imports command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-retain-imports",
+          "markdownDescription": "Enables the retain_imports command without any pre-configured scope."
         },
         {
           "description": "Enables the save_view command without any pre-configured scope.",
@@ -345,6 +357,12 @@
           "markdownDescription": "Denies the list_projects command without any pre-configured scope."
         },
         {
+          "description": "Denies the list_test_pcaps command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-test-pcaps",
+          "markdownDescription": "Denies the list_test_pcaps command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_views command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-views",
@@ -379,6 +397,12 @@
           "type": "string",
           "const": "deny-rename-project",
           "markdownDescription": "Denies the rename_project command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the retain_imports command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-retain-imports",
+          "markdownDescription": "Denies the retain_imports command without any pre-configured scope."
         },
         {
           "description": "Denies the save_view command without any pre-configured scope.",

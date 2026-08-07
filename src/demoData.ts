@@ -1,4 +1,5 @@
-import type { NetworkDataset, Protocol } from './types'
+import { normalizeProtocol } from './protocols'
+import type { NetworkDataset } from './types'
 
 const hosts = [
   ['gateway', '10.20.0.1', 'internal'],
@@ -13,6 +14,11 @@ const hosts = [
   ['cloud-api', '52.85.132.19', 'external'],
   ['suspicious-host', '185.220.101.42', 'external'],
   ['update-service', '151.101.2.217', 'external'],
+  ['plc-line-1', '10.20.3.10', 'internal'],
+  ['hmi-line-1', '10.20.3.20', 'internal'],
+  ['opc-gateway', '10.20.3.30', 'internal'],
+  ['building-controller', '10.20.4.10', 'internal'],
+  ['substation-rtu', '10.20.5.10', 'internal'],
 ] as const
 
 export const demoDataset: NetworkDataset = {
@@ -40,11 +46,14 @@ export const demoDataset: NetworkDataset = {
     [5, 11, 'HTTP', 80, 382000, 590], [0, 9, 'TLS', 443, 510000, 635],
     [1, 3, 'TCP', 9200, 880000, 742], [6, 3, 'TCP', 445, 668000, 521],
     [10, 6, 'TCP', 49172, 94000, 166], [4, 9, 'TLS', 443, 210000, 290],
+    [13, 12, 'MODBUS', 502, 740000, 1210], [13, 14, 'OPC UA', 4840, 630000, 842],
+    [14, 4, 'ETHERNET/IP', 44818, 490000, 618], [15, 0, 'BACNET', 47808, 210000, 402],
+    [16, 0, 'DNP3', 20000, 375000, 537],
   ].map(([source, target, protocol, port, bytes, packets], index) => ({
     id: `e${index}`,
     source: `n${source}`,
     target: `n${target}`,
-    protocol: normalizeProtocol(String(protocol)),
+    protocol: normalizeProtocol(String(protocol), undefined, Number(port)),
     port: Number(port),
     bytes: Number(bytes),
     packets: Number(packets),
@@ -52,11 +61,6 @@ export const demoDataset: NetworkDataset = {
     lastSeen: `2026-08-03T15:${String(20 + index).padStart(2, '0')}:00Z`,
     imports: ['sensor-east-2026-08-03.csv'],
   })),
-}
-
-function normalizeProtocol(value: string): Protocol {
-  if (value === 'SMB' || value === 'HTTPS') return 'TCP'
-  return value as Protocol
 }
 
 export const sampleCsvRows: Record<string, string>[] = [

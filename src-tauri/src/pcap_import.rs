@@ -96,7 +96,7 @@ where
     let mut accepted = 0_u64;
     let mut skipped = 0_u64;
     let mut consumed = 0_u64;
-    let mut legacy_ethernet = false;
+    let mut legacy_linktype = None;
     let mut legacy_fraction_divisor = 1_000_u64;
     let mut interfaces: Vec<(Linktype, u64, u64)> = Vec::new();
 
@@ -120,7 +120,8 @@ where
             Ok((offset, block)) => {
                 let (packet_seen, decoded) = match block {
                     PcapBlockOwned::LegacyHeader(header) => {
-                        legacy_ethernet = header.network == Linktype::ETHERNET;
+                        legacy_linktype =
+                            supported_linktype(header.network).then_some(header.network);
                         legacy_fraction_divisor =
                             if matches!(header.magic_number, 0xa1b2_3c4d | 0x4d3c_b2a1) {
                                 1_000_000
@@ -129,12 +130,16 @@ where
                             };
                         (false, None)
                     }
-                    PcapBlockOwned::Legacy(packet) if legacy_ethernet => {
+                    PcapBlockOwned::Legacy(packet) if legacy_linktype.is_some() => {
                         let timestamp = i64::from(packet.ts_sec) * 1_000
                             + (u64::from(packet.ts_usec) / legacy_fraction_divisor) as i64;
                         (
                             true,
-                            decode_packet_with_hostnames(packet.data, Some(timestamp)),
+                            decode_packet_with_linktype(
+                                packet.data,
+                                Some(timestamp),
+                                legacy_linktype.unwrap(),
+                            ),
                         )
                     }
                     PcapBlockOwned::Legacy(_) => (true, None),
@@ -153,20 +158,24 @@ where
                     PcapBlockOwned::NG(Block::EnhancedPacket(packet)) => {
                         let decoded = interfaces
                             .get(packet.if_id as usize)
-                            .filter(|(linktype, _, _)| *linktype == Linktype::ETHERNET)
-                            .and_then(|(_, resolution, offset)| {
+                            .filter(|(linktype, _, _)| supported_linktype(*linktype))
+                            .and_then(|(linktype, resolution, offset)| {
                                 let timestamp =
                                     (packet.decode_ts_f64(*offset, *resolution) * 1_000.0) as i64;
-                                decode_packet_with_hostnames(packet.data, Some(timestamp))
+                                decode_packet_with_linktype(packet.data, Some(timestamp), *linktype)
                             });
                         (true, decoded)
                     }
                     PcapBlockOwned::NG(Block::SimplePacket(packet))
                         if interfaces
                             .first()
-                            .is_some_and(|(linktype, _, _)| *linktype == Linktype::ETHERNET) =>
+                            .is_some_and(|(linktype, _, _)| supported_linktype(*linktype)) =>
                     {
-                        (true, decode_packet_with_hostnames(packet.data, None))
+                        let linktype = interfaces.first().unwrap().0;
+                        (
+                            true,
+                            decode_packet_with_linktype(packet.data, None, linktype),
+                        )
                     }
                     PcapBlockOwned::NG(Block::SimplePacket(_)) => (true, None),
                     _ => (false, None),
@@ -234,8 +243,27 @@ fn decode_packet(packet: &[u8], timestamp: Option<i64>) -> Option<FlowRecord> {
     decode_packet_with_hostnames(packet, timestamp).map(|decoded| decoded.flow)
 }
 
-pub fn decode_packet_with_hostnames(packet: &[u8], timestamp: Option<i64>) -> Option<DecodedPacket> {
-    let sliced = SlicedPacket::from_ethernet(packet).ok()?;
+pub fn decode_packet_with_hostnames(
+    packet: &[u8],
+    timestamp: Option<i64>,
+) -> Option<DecodedPacket> {
+    decode_packet_with_linktype(packet, timestamp, Linktype::ETHERNET)
+}
+
+fn supported_linktype(linktype: Linktype) -> bool {
+    matches!(linktype, Linktype::ETHERNET | Linktype::LINUX_SLL)
+}
+
+fn decode_packet_with_linktype(
+    packet: &[u8],
+    timestamp: Option<i64>,
+    linktype: Linktype,
+) -> Option<DecodedPacket> {
+    let sliced = match linktype {
+        Linktype::ETHERNET => SlicedPacket::from_ethernet(packet).ok()?,
+        Linktype::LINUX_SLL => SlicedPacket::from_linux_sll(packet).ok()?,
+        _ => return None,
+    };
     let (source_ip, destination_ip, network_protocol) = match sliced.net? {
         NetSlice::Ipv4(ipv4) => (
             ipv4.header().source_addr().to_string(),
@@ -493,6 +521,59 @@ mod tests {
         let _ = std::fs::remove_file(database);
         assert_eq!(result.accepted, 1);
         assert_eq!(result.skipped, 0);
+    }
+
+    #[test]
+    fn imports_real_bundled_ot_captures() {
+        let capture_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("test-pcaps");
+        for (file_name, expected_service_port, expected_minimum_nodes) in [
+            ("wireshark-modbus-tcp-float.pcap", 502, 1),
+            ("wireshark-s7comm-plc-status.pcap", 102, 1),
+            ("wireshark-dnp3-select-operate.pcap", 20_000, 1),
+            ("wireshark-iec104.pcap", 2_404, 1),
+            ("wireshark-hart-ip.pcap", 5_094, 1),
+            ("netresec-4sics-geek-lounge-2015-10-20.pcap", 102, 10),
+            ("netresec-s4x15-bacnet-fiu.pcap", 47_808, 10),
+        ] {
+            let database = std::env::temp_dir().join(format!(
+                "netmap-ot-{}-{}.sqlite3",
+                file_name,
+                uuid::Uuid::new_v4()
+            ));
+            let mut connection = crate::db::open(&database).unwrap();
+            let result = import(
+                &mut connection,
+                &capture_root.join(file_name),
+                &format!("real-{file_name}"),
+                &AtomicBool::new(false),
+                |_| {},
+            )
+            .unwrap();
+            assert!(
+                result.accepted > 0,
+                "expected at least one supported IP flow in {file_name}"
+            );
+            let graph =
+                crate::db::query_graph(&connection, &crate::models::GraphFilters::default())
+                    .unwrap();
+            assert!(
+                graph.nodes.len() >= expected_minimum_nodes,
+                "expected at least {expected_minimum_nodes} IP nodes in {file_name}, got {}",
+                graph.nodes.len()
+            );
+            assert!(
+                graph.edges.iter().any(|edge| {
+                    edge.source_port == Some(expected_service_port)
+                        || edge.destination_port == Some(expected_service_port)
+                }),
+                "expected service port {expected_service_port} in {file_name}"
+            );
+            drop(connection);
+            let _ = std::fs::remove_file(database);
+        }
     }
 
     #[test]

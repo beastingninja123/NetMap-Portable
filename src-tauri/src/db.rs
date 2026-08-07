@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS nodes (
   ip TEXT NOT NULL UNIQUE,
   ip_version INTEGER NOT NULL,
   total_bytes INTEGER NOT NULL DEFAULT 0,
-  total_packets INTEGER NOT NULL DEFAULT 0
+  total_packets INTEGER NOT NULL DEFAULT 0,
+  asset_role TEXT,
+  security_zone TEXT
 );
 CREATE TABLE IF NOT EXISTS hostnames (
   ip TEXT PRIMARY KEY,
@@ -90,7 +92,22 @@ pub fn open(path: &Path) -> Result<Connection> {
     let connection = Connection::open(path)?;
     connection.busy_timeout(std::time::Duration::from_secs(10))?;
     connection.execute_batch(SCHEMA)?;
+    ensure_node_classification_columns(&connection)?;
     Ok(connection)
+}
+
+fn ensure_node_classification_columns(connection: &Connection) -> Result<()> {
+    let columns = connection
+        .prepare("SELECT name FROM pragma_table_info('nodes')")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<HashSet<_>, _>>()?;
+    if !columns.contains("asset_role") {
+        connection.execute("ALTER TABLE nodes ADD COLUMN asset_role TEXT", [])?;
+    }
+    if !columns.contains("security_zone") {
+        connection.execute("ALTER TABLE nodes ADD COLUMN security_zone TEXT", [])?;
+    }
+    Ok(())
 }
 
 pub fn start_import(
@@ -227,7 +244,33 @@ pub fn delete_import(connection: &mut Connection, id: &str) -> Result<()> {
     if changed == 0 {
         return Err(AppError::NotFound(format!("import {id}")));
     }
-    transaction.execute_batch(
+    reconcile_import_totals(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn retain_imports(connection: &mut Connection, import_ids: &[String]) -> Result<()> {
+    if import_ids.is_empty() {
+        return Err(AppError::Invalid(
+            "at least one completed import must be retained".into(),
+        ));
+    }
+    let transaction = connection.transaction()?;
+    let placeholders = (0..import_ids.len())
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(",");
+    transaction.execute(
+        &format!("DELETE FROM imports WHERE id NOT IN ({placeholders})"),
+        params_from_iter(import_ids.iter()),
+    )?;
+    reconcile_import_totals(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn reconcile_import_totals(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
         "UPDATE flows SET
            bytes=COALESCE((SELECT sum(bytes) FROM flow_imports WHERE flow_id=flows.id),0),
            packets=COALESCE((SELECT sum(packets) FROM flow_imports WHERE flow_id=flows.id),0),
@@ -236,10 +279,12 @@ pub fn delete_import(connection: &mut Connection, id: &str) -> Result<()> {
          DELETE FROM flows WHERE NOT EXISTS(SELECT 1 FROM flow_imports WHERE flow_id=flows.id);
          DELETE FROM nodes WHERE NOT EXISTS(
            SELECT 1 FROM flows WHERE source_node_id=nodes.id OR destination_node_id=nodes.id
+         );
+         DELETE FROM hostnames WHERE NOT EXISTS(
+           SELECT 1 FROM nodes WHERE nodes.ip=hostnames.ip
          );",
     )?;
-    rebuild_node_totals(&transaction)?;
-    transaction.commit()?;
+    rebuild_node_totals(connection)?;
     Ok(())
 }
 
@@ -354,7 +399,8 @@ pub fn query_graph(connection: &Connection, filters: &GraphFilters) -> Result<Gr
              SELECT DISTINCT t.name AS name FROM tags t
              JOIN node_tags nt ON nt.tag_id=t.id WHERE nt.node_id=n.id ORDER BY t.name
            )), '[]'),
-           (SELECT body FROM notes WHERE node_id=n.id ORDER BY updated_at DESC LIMIT 1)
+           (SELECT body FROM notes WHERE node_id=n.id ORDER BY updated_at DESC LIMIT 1),
+           n.asset_role,n.security_zone
          FROM nodes n WHERE n.id=?1",
     )?;
     for id in node_ids {
@@ -372,6 +418,8 @@ pub fn query_graph(connection: &Connection, filters: &GraphFilters) -> Result<Gr
                     imports: parse_json_list(row.get::<_, String>(8)?),
                     tags: parse_json_list(row.get::<_, String>(9)?),
                     notes: row.get(10)?,
+                    asset_role: row.get(11)?,
+                    security_zone: row.get(12)?,
                 })
             })
             .optional()?
@@ -429,6 +477,8 @@ pub fn set_node_metadata(
     node_id: i64,
     tags: &[String],
     notes: Option<&str>,
+    asset_role: Option<&str>,
+    security_zone: Option<&str>,
 ) -> Result<()> {
     if tags.len() > 50 {
         return Err(AppError::Invalid(
@@ -456,6 +506,19 @@ pub fn set_node_metadata(
     {
         return Err(AppError::NotFound(format!("node {node_id}")));
     }
+    let validate_classification = |value: Option<&str>, label: &str| -> Result<Option<String>> {
+        let cleaned = value.map(str::trim).filter(|value| !value.is_empty());
+        if cleaned.is_some_and(|value| value.len() > 80 || value.chars().any(char::is_control)) {
+            return Err(AppError::Invalid(format!("invalid {label}")));
+        }
+        Ok(cleaned.map(str::to_string))
+    };
+    let asset_role = validate_classification(asset_role, "asset role")?;
+    let security_zone = validate_classification(security_zone, "security zone")?;
+    transaction.execute(
+        "UPDATE nodes SET asset_role=?2,security_zone=?3 WHERE id=?1",
+        params![node_id, asset_role, security_zone],
+    )?;
     transaction.execute("DELETE FROM node_tags WHERE node_id=?1", [node_id])?;
     for tag in cleaned {
         transaction.execute(
@@ -527,17 +590,68 @@ mod tests {
             node_id,
             &["critical".into(), "server".into()],
             Some("Reviewed offline"),
+            Some("PLC"),
+            Some("Control"),
         )
         .unwrap();
         let result = query_graph(&connection, &GraphFilters::default()).unwrap();
         let changed = result.nodes.iter().find(|node| node.id == node_id).unwrap();
         assert_eq!(changed.tags, vec!["critical", "server"]);
         assert_eq!(changed.notes.as_deref(), Some("Reviewed offline"));
+        assert_eq!(changed.asset_role.as_deref(), Some("PLC"));
+        assert_eq!(changed.security_zone.as_deref(), Some("Control"));
 
         let state = serde_json::json!({"layout": "circle", "filters": {"query": "10.0.0.1"}});
         save_view(&connection, "view-one", "Investigate host", &state).unwrap();
         let views = list_views(&connection).unwrap();
         assert_eq!(views[0].name, "Investigate host");
         assert_eq!(views[0].state, state);
+    }
+
+    #[test]
+    fn retaining_new_imports_replaces_prior_topology() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let first = FlowRecord {
+            source_ip: "10.0.0.1".into(),
+            destination_ip: "10.0.0.2".into(),
+            source_port: Some(40_001),
+            destination_port: Some(502),
+            protocol: "TCP".into(),
+            bytes: 100,
+            packets: 1,
+            timestamp: Some(1),
+        };
+        let second = FlowRecord {
+            source_ip: "10.10.0.1".into(),
+            destination_ip: "10.10.0.2".into(),
+            source_port: Some(40_002),
+            destination_port: Some(20_000),
+            protocol: "TCP".into(),
+            bytes: 200,
+            packets: 2,
+            timestamp: Some(2),
+        };
+        start_import(&connection, "old", "pcap", "old.pcap").unwrap();
+        insert_batch(&mut connection, "old", &[first]).unwrap();
+        finish_import(&connection, "old", 1, 0, "complete", None).unwrap();
+        start_import(&connection, "new", "pcap", "new.pcap").unwrap();
+        insert_batch(&mut connection, "new", &[second]).unwrap();
+        finish_import(&connection, "new", 1, 0, "complete", None).unwrap();
+
+        let merged = query_graph(&connection, &GraphFilters::default()).unwrap();
+        assert_eq!(merged.nodes.len(), 4);
+        assert_eq!(merged.edges.len(), 2);
+
+        retain_imports(&mut connection, &["new".into()]).unwrap();
+        let graph = query_graph(&connection, &GraphFilters::default()).unwrap();
+        let ips = graph
+            .nodes
+            .iter()
+            .map(|node| node.ip.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(ips, HashSet::from(["10.10.0.1", "10.10.0.2"]));
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(graph.edges[0].destination_port, Some(20_000));
     }
 }

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { injectDemoLiveFlow } from './liveDemo'
+import type { NetworkDataset } from './types'
 
 describe('demo live stream', () => {
   it('grows the live dataset with hosts and flows', () => {
-    let dataset = { nodes: [], edges: [] }
+    let dataset: NetworkDataset = { nodes: [], edges: [] }
     dataset = injectDemoLiveFlow(dataset, 1)
     dataset = injectDemoLiveFlow(dataset, 2)
     dataset = injectDemoLiveFlow(dataset, 3)

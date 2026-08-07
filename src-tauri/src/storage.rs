@@ -1,5 +1,5 @@
 use crate::error::{AppError, Result};
-use crate::models::ProjectInfo;
+use crate::models::{ProjectInfo, TestCapture};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -119,6 +119,83 @@ impl Storage {
         Ok(exports.join(safe))
     }
 
+    pub fn list_test_captures(&self) -> Result<Vec<TestCapture>> {
+        let root = if self.portable {
+            std::env::current_exe()?
+                .parent()
+                .ok_or_else(|| AppError::Invalid("the executable has no parent directory".into()))?
+                .join("test-pcaps")
+        } else {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
+                .join("test-pcaps")
+        };
+        let catalog = [
+            (
+                "netresec-4sics-geek-lounge-2015-10-20",
+                "4SICS Multi-Host ICS Lab",
+                "15 IP hosts, 246k packets, 24.5 MB. Real PLC, RTU, gateway, firewall, switch, and workstation lab traffic.",
+                &["S7COMM", "TCP", "UDP", "DNS"][..],
+            ),
+            (
+                "netresec-s4x15-bacnet-fiu",
+                "S4x15 Multi-Host BACnet Lab",
+                "12 IP hosts, 101k packets, 10.2 MB. Real BACnet Internet and supporting ICS Village traffic.",
+                &["BACNET", "TCP", "UDP", "HTTP"][..],
+            ),
+            (
+                "wireshark-modbus-tcp-float",
+                "Real Modbus/TCP Session",
+                "Wireshark capture of Modbus/TCP floating-point register traffic.",
+                &["MODBUS"][..],
+            ),
+            (
+                "wireshark-s7comm-plc-status",
+                "Real S7 PLC Status Session",
+                "Wireshark capture of a client connecting to and reading Siemens S7-300 PLC status.",
+                &["S7COMM"][..],
+            ),
+            (
+                "wireshark-dnp3-select-operate",
+                "Real DNP3 Select/Operate",
+                "Wireshark DNP3 control sequence originally sourced from pcapr.net.",
+                &["DNP3"][..],
+            ),
+            (
+                "wireshark-iec104",
+                "Real IEC 104 Communication",
+                "Wireshark IEC 60870-5-104 communication log.",
+                &["IEC 104"][..],
+            ),
+            (
+                "wireshark-hart-ip",
+                "Real HART-IP Sessions",
+                "Wireshark capture containing both HART-IP UDP and TCP sessions.",
+                &["HART-IP"][..],
+            ),
+        ];
+        catalog
+            .into_iter()
+            .map(|(id, name, description, protocols)| {
+                let path = root.join(format!("{id}.pcap"));
+                if !path.is_file() {
+                    return Err(AppError::NotFound(format!(
+                        "bundled test capture {}",
+                        path.display()
+                    )));
+                }
+                Ok(TestCapture {
+                    id: id.into(),
+                    name: name.into(),
+                    description: description.into(),
+                    protocols: protocols.iter().map(|value| (*value).into()).collect(),
+                    path: path.display().to_string(),
+                })
+            })
+            .collect()
+    }
+
     fn info(&self, id: &str, name: &str) -> ProjectInfo {
         ProjectInfo {
             id: id.to_string(),
@@ -215,6 +292,28 @@ mod tests {
                 .trim(),
             "Renamed Case"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bundled_test_capture_catalog_resolves_local_files() {
+        let root = std::env::temp_dir().join(format!("netmap-tests-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let storage = Storage {
+            root: root.clone(),
+            portable: false,
+        };
+        let captures = storage.list_test_captures().unwrap();
+        assert_eq!(captures.len(), 7);
+        assert!(captures
+            .iter()
+            .all(|capture| Path::new(&capture.path).is_file()));
+        assert!(captures
+            .iter()
+            .any(|capture| capture.id == "wireshark-modbus-tcp-float"));
+        assert!(captures
+            .iter()
+            .any(|capture| capture.id == "netresec-4sics-geek-lounge-2015-10-20"));
         let _ = fs::remove_dir_all(&root);
     }
 }

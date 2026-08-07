@@ -5,7 +5,7 @@ use crate::live_capture::{self, LiveSession};
 use crate::models::{
     CaptureInterfacesResponse, CsvMapping, CsvPreview, Diagnostics, GraphFilters, GraphResult,
     ImportProgress, ImportResult, LiveCaptureSession, LiveCaptureUpdate, ProjectInfo,
-    SavedViewRecord,
+    SavedViewRecord, TestCapture,
 };
 use crate::pcap_import;
 use crate::storage::Storage;
@@ -54,6 +54,11 @@ pub fn open_project(project_id: String, state: State<'_, AppState>) -> Result<Pr
 #[tauri::command]
 pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectInfo>> {
     state.storage.list_projects()
+}
+
+#[tauri::command]
+pub fn list_test_pcaps(state: State<'_, AppState>) -> Result<Vec<TestCapture>> {
+    state.storage.list_test_captures()
 }
 
 #[tauri::command]
@@ -216,6 +221,21 @@ pub async fn delete_import(
 }
 
 #[tauri::command]
+pub async fn retain_imports(
+    project_id: String,
+    import_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let database = state.storage.database_path(&project_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut connection = db::open(&database)?;
+        db::retain_imports(&mut connection, &import_ids)
+    })
+    .await
+    .map_err(|error| AppError::Invalid(format!("replace import worker failed: {error}")))?
+}
+
+#[tauri::command]
 pub async fn save_view(
     project_id: String,
     view_id: Option<String>,
@@ -255,12 +275,21 @@ pub async fn set_node_metadata(
     node_id: i64,
     tags: Vec<String>,
     notes: Option<String>,
+    asset_role: Option<String>,
+    security_zone: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<()> {
     let database = state.storage.database_path(&project_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         let mut connection = db::open(&database)?;
-        db::set_node_metadata(&mut connection, node_id, &tags, notes.as_deref())
+        db::set_node_metadata(
+            &mut connection,
+            node_id,
+            &tags,
+            notes.as_deref(),
+            asset_role.as_deref(),
+            security_zone.as_deref(),
+        )
     })
     .await
     .map_err(|error| AppError::Invalid(format!("metadata worker failed: {error}")))?
@@ -396,9 +425,7 @@ pub async fn start_live_capture(
     std::thread::sleep(std::time::Duration::from_millis(150));
 
     let tshark = live_capture::find_tshark().ok_or_else(|| {
-        AppError::Invalid(
-            "tshark not found. Install Wireshark (includes tshark) and Npcap.".into(),
-        )
+        AppError::Invalid("tshark not found. Install Wireshark (includes tshark) and Npcap.".into())
     })?;
     let listed = live_capture::list_interfaces()?;
     let interface = live_capture::validate_interface_id(&interface_id, &listed.interfaces)?;

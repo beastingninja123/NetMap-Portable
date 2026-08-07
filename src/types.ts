@@ -1,4 +1,25 @@
-export type Protocol = 'TCP' | 'UDP' | 'ICMP' | 'DNS' | 'HTTP' | 'TLS' | 'SSH' | 'OTHER'
+export type Protocol =
+  | 'TCP'
+  | 'UDP'
+  | 'ICMP'
+  | 'DNS'
+  | 'HTTP'
+  | 'TLS'
+  | 'SSH'
+  | 'MODBUS'
+  | 'DNP3'
+  | 'ETHERNET/IP'
+  | 'BACNET'
+  | 'OPC UA'
+  | 'S7COMM'
+  | 'PROFINET'
+  | 'IEC 104'
+  | 'FINS'
+  | 'HART-IP'
+  | 'MMS'
+  | 'GOOSE'
+  | 'ETHERCAT'
+  | 'OTHER'
 
 export interface NetworkNode {
   id: string
@@ -14,6 +35,11 @@ export interface NetworkNode {
   imports: string[]
   tags: string[]
   notes?: string
+  assetRole?: AssetRole
+  assetRoleSource?: 'inferred' | 'manual'
+  securityZone?: SecurityZone
+  securityZoneSource?: 'inferred' | 'manual'
+  anomalyCount?: number
 }
 
 export interface NetworkEdge {
@@ -27,6 +53,7 @@ export interface NetworkEdge {
   firstSeen: string
   lastSeen: string
   imports: string[]
+  anomalies?: AnomalyKind[]
 }
 
 export interface AggregatedEdge {
@@ -46,10 +73,45 @@ export interface AggregatedEdge {
 
 export type EdgeDisplayMode = 'hidden' | 'aggregate' | 'per-port'
 export type HostScope = 'all' | 'internal' | 'external'
+export type PathDirection = 'both' | 'outbound' | 'inbound'
+export type AssetRole =
+  | 'PLC'
+  | 'HMI'
+  | 'RTU'
+  | 'Historian'
+  | 'Engineering Workstation'
+  | 'OPC Gateway'
+  | 'Building Controller'
+  | 'Safety System'
+  | 'Field Device'
+  | 'Server'
+  | 'Workstation'
+  | 'Network Infrastructure'
+  | 'External Endpoint'
+  | 'Unknown'
+export type SecurityZone =
+  | 'Enterprise'
+  | 'DMZ'
+  | 'Operations'
+  | 'Supervisory'
+  | 'Control'
+  | 'Safety'
+  | 'Field'
+  | 'External'
+  | 'Unassigned'
+export type AnomalyKind = 'new-pair' | 'new-protocol' | 'new-port' | 'traffic-spike'
 
 export interface NetworkDataset {
   nodes: NetworkNode[]
   edges: NetworkEdge[]
+}
+
+export interface TestCapture {
+  id: string
+  name: string
+  description: string
+  protocols: Protocol[]
+  path: string
 }
 
 export interface ImportMapping {

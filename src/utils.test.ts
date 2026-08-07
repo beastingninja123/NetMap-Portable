@@ -105,6 +105,15 @@ describe('network filters', () => {
     expect(result.edges.every((edge) => edge.port === 443 && edge.protocol === 'TLS' && edge.bytes >= 500_000)).toBe(true)
   })
 
+  it('filters OT protocols independently of standard traffic', () => {
+    const result = filterDataset(demoDataset, {
+      ...filters,
+      protocols: ['MODBUS', 'OPC UA'],
+    })
+    expect(result.edges).toHaveLength(2)
+    expect(result.edges.every((edge) => edge.protocol === 'MODBUS' || edge.protocol === 'OPC UA')).toBe(true)
+  })
+
   it('filters to internal or external hosts only', () => {
     const internal = filterDataset(demoDataset, { ...filters, hostScope: 'internal' })
     const external = filterDataset(demoDataset, { ...filters, hostScope: 'external' })

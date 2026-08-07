@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-retain-imports"
+description = "Enables the retain_imports command without any pre-configured scope."
+commands.allow = ["retain_imports"]
+
+[[permission]]
+identifier = "deny-retain-imports"
+description = "Denies the retain_imports command without any pre-configured scope."
+commands.deny = ["retain_imports"]

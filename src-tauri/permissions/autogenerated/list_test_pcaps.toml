@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-test-pcaps"
+description = "Enables the list_test_pcaps command without any pre-configured scope."
+commands.allow = ["list_test_pcaps"]
+
+[[permission]]
+identifier = "deny-list-test-pcaps"
+description = "Denies the list_test_pcaps command without any pre-configured scope."
+commands.deny = ["list_test_pcaps"]

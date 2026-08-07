@@ -1,8 +1,6 @@
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::models::{
-    CaptureInterface, FlowRecord, GraphFilters, LiveCaptureUpdate, TsharkInfo,
-};
+use crate::models::{CaptureInterface, FlowRecord, GraphFilters, LiveCaptureUpdate, TsharkInfo};
 use crate::pcap_import::decode_packet_with_hostnames;
 use pcap_parser::{create_reader, Block, Linktype, PcapBlockOwned, PcapError};
 use rusqlite::Connection;
@@ -145,7 +143,10 @@ pub fn validate_bpf(filter: &str) -> Result<Option<String>> {
     Ok(Some(trimmed.to_string()))
 }
 
-pub fn validate_interface_id(id: &str, interfaces: &[CaptureInterface]) -> Result<CaptureInterface> {
+pub fn validate_interface_id(
+    id: &str,
+    interfaces: &[CaptureInterface],
+) -> Result<CaptureInterface> {
     interfaces
         .iter()
         .find(|iface| iface.id == id)
@@ -420,7 +421,10 @@ mod tests {
     #[test]
     fn validates_known_interface_ids() {
         let interfaces = parse_interface_list("1. eth0\n2. wlan0\n");
-        assert_eq!(validate_interface_id("2", &interfaces).unwrap().name, "wlan0");
+        assert_eq!(
+            validate_interface_id("2", &interfaces).unwrap().name,
+            "wlan0"
+        );
         assert!(validate_interface_id("9", &interfaces).is_err());
     }
 }

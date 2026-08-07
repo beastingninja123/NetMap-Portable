@@ -29,6 +29,13 @@ try {
     $runtimeDestination = Join-Path $PortableRoot "WebView2.FixedVersionRuntime"
     Copy-Item $RuntimeSource $runtimeDestination -Recurse
     Copy-Item (Join-Path $Root "README.md") $PortableRoot
+    $captureDestination = Join-Path $PortableRoot "test-pcaps"
+    New-Item -ItemType Directory -Path $captureDestination | Out-Null
+    Copy-Item (Join-Path $Root "test-pcaps\SOURCES.md") $captureDestination
+    foreach ($capturePattern in @("wireshark-*.pcap*", "netresec-*.pcap*")) {
+        Get-ChildItem (Join-Path $Root "test-pcaps") -File -Filter $capturePattern |
+            Copy-Item -Destination $captureDestination
+    }
 
     # Fixed WebView2 v120+ uses an AppContainer renderer on Windows 10.
     # Grant its standard package identities read/execute access while the

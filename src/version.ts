@@ -1,2 +1,2 @@
 /** Keep in sync with package.json, src-tauri/Cargo.toml, and tauri.conf.json. */
-export const APP_VERSION = '0.3.0'
+export const APP_VERSION = '0.4.0'
