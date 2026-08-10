@@ -14,6 +14,7 @@ import {
   persistNodeMetadata,
   persistSavedView,
   previewCsv,
+  queryPackets,
   renameProject,
   startLiveCapture,
   stopLiveCapture,
@@ -45,6 +46,9 @@ import type {
   HostScope,
   ImportMapping,
   ImportProgress,
+  PacketPage,
+  PacketRecord,
+  PcapImportOptions,
   NetworkDataset,
   NetworkEdge,
   NetworkNode,
@@ -62,7 +66,15 @@ const defaultFilters: FilterState = {
 }
 
 type ImportStage = 'source' | 'mapping' | 'progress' | 'complete'
-type WorkspaceTab = 'investigation' | 'live'
+type WorkspaceTab = 'investigation' | 'packets' | 'live'
+
+const defaultPcapOptions: PcapImportOptions = {
+  packetIndexing: false,
+  macAddresses: true,
+  dnsHostnames: true,
+  tcpFlags: false,
+  payloadPreviewBytes: 0,
+}
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`
@@ -111,6 +123,7 @@ function App() {
   const [importError, setImportError] = useState('')
   const [importSummary, setImportSummary] = useState('')
   const [mergeWithExisting, setMergeWithExisting] = useState(false)
+  const [pcapOptions, setPcapOptions] = useState<PcapImportOptions>(defaultPcapOptions)
   const [savedViews, setSavedViews] = useState<SavedView[]>([
     { id: 'cross', name: 'Boundary traffic', filters: { ...defaultFilters, direction: 'cross-boundary' }, layout: 'cose' },
     { id: 'watch', name: 'Suspicious host ±1', filters: { ...defaultFilters, query: '185.220.101.42', neighborhood: 1 }, layout: 'breadthfirst' },
@@ -121,6 +134,7 @@ function App() {
   const [showHostnames, setShowHostnames] = useState(true)
   const [nodeSpacing, setNodeSpacing] = useState(70)
   const [groupZones, setGroupZones] = useState(false)
+  const [groupPurdue, setGroupPurdue] = useState(false)
   const [showConduits, setShowConduits] = useState(false)
   const [showAnomalies, setShowAnomalies] = useState(false)
   const [baselinePercent, setBaselinePercent] = useState(30)
@@ -461,7 +475,7 @@ function App() {
     setImportStage('progress')
     setImportError('')
     try {
-      const result = await importCapture(importPaths, mapping, mergeWithExisting, setProgress, controller.signal)
+      const result = await importCapture(importPaths, mapping, mergeWithExisting, setProgress, controller.signal, pcapOptions)
       setDataset(result.dataset)
       setFilters(defaultFilters)
       setTimelinePercent(100)
@@ -610,6 +624,15 @@ function App() {
         <button
           type="button"
           role="tab"
+          aria-selected={workspaceTab === 'packets'}
+          className={workspaceTab === 'packets' ? 'active' : ''}
+          onClick={() => setWorkspaceTab('packets')}
+        >
+          Packet inspection
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={workspaceTab === 'live'}
           className={workspaceTab === 'live' ? 'active' : ''}
           onClick={() => setWorkspaceTab('live')}
@@ -618,7 +641,7 @@ function App() {
         </button>
       </div>
 
-      <div className="workspace">
+      {workspaceTab === 'packets' ? <PacketInspector /> : <div className="workspace">
         <aside className="sidebar" aria-label="Project and filters">
           <div className="side-scroll">
             {workspaceTab === 'live' ? (
@@ -719,12 +742,12 @@ function App() {
                 </div>
               </div>
               <label className="search-field">
-                <span className="sr-only">Search IP prefixes, hostnames, or CIDR ranges</span>
+                <span className="sr-only">Search IPs, hostnames, MAC addresses, vendors, or CIDR ranges</span>
                 <Icon name="search" />
-                <input title={CONTROL_HELP.search} value={filters.query} onChange={(event) => updateFilter('query', event.target.value)} placeholder="IP, hostname, or CIDR" />
+                <input title={CONTROL_HELP.search} value={filters.query} onChange={(event) => updateFilter('query', event.target.value)} placeholder="IP, name, MAC, vendor, or CIDR" />
                 <kbd>⌘ K</kbd>
               </label>
-              <p className="filter-help">Search IPs, names, or CIDR ranges. Comma-separate several values. <HelpHint text={CONTROL_HELP.search} /></p>
+              <p className="filter-help">Search IPs, names, MACs, vendors, or CIDR ranges. Comma-separate several values. <HelpHint text={CONTROL_HELP.search} /></p>
               <div className="field-grid">
                 <label>From <HelpHint text={CONTROL_HELP.time} /><input type="datetime-local" value={filters.startTime} onChange={(event) => updateFilter('startTime', event.target.value)} /></label>
                 <label>To <HelpHint text={CONTROL_HELP.time} /><input type="datetime-local" value={filters.endTime} onChange={(event) => updateFilter('endTime', event.target.value)} /></label>
@@ -816,7 +839,7 @@ function App() {
                 <input type="range" min="25" max="1000" step="25" value={filters.complexityCap} onChange={(event) => updateFilter('complexityCap', Number(event.target.value))} />
               </label>
               <label className="check"><input type="checkbox" checked={filters.showEdgeLabels} onChange={(event) => updateFilter('showEdgeLabels', event.target.checked)} /> <span>Show connection labels <HelpHint text={CONTROL_HELP.edgeLabels} /></span></label>
-              <label className="check"><input type="checkbox" checked={filters.groupSubnets} onChange={(event) => { updateFilter('groupSubnets', event.target.checked); if (event.target.checked) setGroupZones(false) }} /> <span>Group by subnet <HelpHint text={CONTROL_HELP.subnet} /></span></label>
+              <label className="check"><input type="checkbox" checked={filters.groupSubnets} onChange={(event) => { updateFilter('groupSubnets', event.target.checked); if (event.target.checked) { setGroupZones(false); setGroupPurdue(false) } }} /> <span>Group by subnet <HelpHint text={CONTROL_HELP.subnet} /></span></label>
               <label className="check"><input type="checkbox" checked={filters.hideIsolates} onChange={(event) => updateFilter('hideIsolates', event.target.checked)} /> <span>Hide isolated hosts <HelpHint text={CONTROL_HELP.isolates} /></span></label>
               <label className="check"><input type="checkbox" checked={filters.hideNoise} onChange={(event) => updateFilter('hideNoise', event.target.checked)} /> <span>Hide low-volume noise <HelpHint text={CONTROL_HELP.noise} /></span></label>
             </section>
@@ -831,7 +854,8 @@ function App() {
                   <option value="inbound">Inbound only</option>
                 </select>
               </label>
-              <label className="check"><input type="checkbox" checked={groupZones} onChange={(event) => { setGroupZones(event.target.checked); if (event.target.checked) updateFilter('groupSubnets', false) }} /> <span>Group by IEC 62443 zone <HelpHint text={`${CONTROL_HELP.iec62443} ${CONTROL_HELP.zone}`} /></span></label>
+              <label className="check"><input type="checkbox" checked={groupZones} onChange={(event) => { setGroupZones(event.target.checked); if (event.target.checked) { updateFilter('groupSubnets', false); setGroupPurdue(false) } }} /> <span>Group by IEC 62443 zone <HelpHint text={`${CONTROL_HELP.iec62443} ${CONTROL_HELP.zone}`} /></span></label>
+              <label className="check"><input type="checkbox" checked={groupPurdue} onChange={(event) => { setGroupPurdue(event.target.checked); if (event.target.checked) { updateFilter('groupSubnets', false); setGroupZones(false) } }} /> <span>Organize by Purdue Model level</span></label>
               <label className="check"><input type="checkbox" checked={showConduits} onChange={(event) => setShowConduits(event.target.checked)} /> <span>Highlight cross-zone conduits <HelpHint text={CONTROL_HELP.conduit} /></span></label>
               <label className="check"><input type="checkbox" checked={showAnomalies} onChange={(event) => setShowAnomalies(event.target.checked)} /> <span>Highlight baseline anomalies <HelpHint text={CONTROL_HELP.anomalies} /></span></label>
               <label>Baseline learning window <HelpHint text={CONTROL_HELP.baseline} /> <output>{baselinePercent}%</output>
@@ -915,6 +939,7 @@ function App() {
             nodeSpacing={nodeSpacing}
             groupSubnets={filters.groupSubnets}
             groupZones={groupZones}
+            groupPurdue={groupPurdue}
             showConduits={showConduits}
             showAnomalies={showAnomalies}
             pathDirection={pathDirection}
@@ -988,7 +1013,7 @@ function App() {
             </div>
           )}
         </aside>
-      </div>
+      </div>}
 
       {testCaptureOpen && (
         <TestCaptureDialog
@@ -1010,12 +1035,14 @@ function App() {
           error={importError}
           summary={importSummary}
           mergeWithExisting={mergeWithExisting}
+          pcapOptions={pcapOptions}
           onClose={() => setImportOpen(false)}
           onSelect={selectNativeFiles}
           onBrowserFile={selectBrowserFile}
           onMapping={setMapping}
           onMergeWithExisting={setMergeWithExisting}
-          onNext={() => setImportStage(importKind === 'csv' ? 'mapping' : 'progress')}
+          onPcapOptions={setPcapOptions}
+          onNext={() => setImportStage('mapping')}
           onImport={runImport}
           onCancel={() => abortRef.current?.abort()}
         />
@@ -1104,9 +1131,14 @@ function NodeDetails({ node, edges, peerFor, onChange }: {
     <>
       <div className="details-header">
         <span className={`host-avatar ${node.kind}`}>⌁</span>
-        <div><span className="eyebrow">{node.kind} HOST</span><h2>{node.ip}</h2><p>{node.hostname ?? 'No hostname observed'}</p></div>
+        <div><span className="eyebrow">{node.kind} HOST</span><h2>{node.ip}</h2><p>{node.hostname ?? node.vendor ?? 'No hostname observed'}</p></div>
       </div>
       <div className="risk-banner"><span>Shielded</span><strong>{node.kind === 'internal' ? 'Internal asset' : 'External endpoint'}</strong></div>
+      <section className="detail-section inline-facts">
+        <div><h3>MAC ADDRESS</h3><p>{node.mac ?? 'Not observed'}</p></div>
+        <div><h3>VENDOR</h3><p>{node.vendor ?? (node.mac ? 'Unknown or private MAC' : 'Not available')}</p></div>
+      </section>
+      <section className="detail-section"><h3>PURDUE MODEL</h3><p>{node.purdueLevel ?? 'External / unassigned'}</p></section>
       <section className="detail-section asset-classification">
         <h3>OT ASSET CLASSIFICATION</h3>
         <label>Asset role <HelpHint text={`${CONTROL_HELP.assetRole} ${ASSET_ROLE_HELP[node.assetRole ?? 'Unknown']}`} />
@@ -1269,6 +1301,63 @@ function AggregatedEdgeDetails({ edge, nodes, expanded, onToggleExpand, onSelect
   )
 }
 
+function PacketInspector() {
+  const [page, setPage] = useState<PacketPage>({ packets: [], total: 0 })
+  const [offset, setOffset] = useState(0)
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState<PacketRecord | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    void queryPackets(offset, search).then((result) => {
+      if (!cancelled) {
+        setPage(result)
+        setSelected((current) => result.packets.find((packet) => packet.packetNumber === current?.packetNumber) ?? result.packets[0] ?? null)
+        setError('')
+      }
+    }).catch((reason) => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [offset, search])
+
+  return (
+    <div className="packet-workspace">
+      <header className="packet-header">
+        <div><span className="eyebrow">DEEP PACKET INSPECTION</span><h2>Packet index</h2><p>{page.total.toLocaleString()} retained packets · offline metadata inspection</p></div>
+        <label className="packet-search"><span>Filter packets</span><input value={search} onChange={(event) => { setOffset(0); setSearch(event.target.value) }} placeholder="IP, MAC, or protocol" /></label>
+      </header>
+      {error && <div className="error-box">{error}</div>}
+      {!loading && page.total === 0 ? (
+        <div className="packet-empty"><h3>No packet index is available</h3><p>Import a PCAP using the <strong>Deep inspection</strong> profile. Fast topology imports intentionally retain only aggregated flows.</p></div>
+      ) : (
+        <div className="packet-grid">
+          <section className="packet-table-wrap">
+            <table className="packet-table"><thead><tr><th>#</th><th>Time</th><th>Source</th><th>Destination</th><th>Protocol</th><th>Length</th></tr></thead><tbody>
+              {page.packets.map((packet) => <tr key={packet.packetNumber} className={selected?.packetNumber === packet.packetNumber ? 'selected' : ''} onClick={() => setSelected(packet)}>
+                <td>{packet.packetNumber}</td><td>{packet.timestamp ? new Date(packet.timestamp).toLocaleTimeString() : '—'}</td>
+                <td>{packet.sourceIp}{packet.sourcePort !== undefined ? `:${packet.sourcePort}` : ''}</td><td>{packet.destinationIp}{packet.destinationPort !== undefined ? `:${packet.destinationPort}` : ''}</td>
+                <td><span className="protocol-pill">{packet.protocol}</span></td><td>{packet.length} B</td>
+              </tr>)}
+            </tbody></table>
+            <footer className="packet-pagination"><button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 250))}>Previous</button><span>{page.total ? `${offset + 1}–${Math.min(offset + page.packets.length, page.total)} of ${page.total}` : '0 packets'}</span><button disabled={offset + page.packets.length >= page.total} onClick={() => setOffset(offset + 250)}>Next</button></footer>
+          </section>
+          <aside className="packet-details">
+            {selected ? <>
+              <span className="eyebrow">PACKET {selected.packetNumber}</span><h2>{selected.protocol}</h2>
+              <dl><div><dt>Timestamp</dt><dd>{selected.timestamp ? new Date(selected.timestamp).toLocaleString() : 'Not recorded'}</dd></div><div><dt>Frame length</dt><dd>{selected.length} bytes</dd></div><div><dt>Source IP</dt><dd>{selected.sourceIp}{selected.sourcePort !== undefined ? `:${selected.sourcePort}` : ''}</dd></div><div><dt>Destination IP</dt><dd>{selected.destinationIp}{selected.destinationPort !== undefined ? `:${selected.destinationPort}` : ''}</dd></div><div><dt>Source MAC</dt><dd>{selected.sourceMac ?? 'Not retained'}</dd></div><div><dt>Destination MAC</dt><dd>{selected.destinationMac ?? 'Not retained'}</dd></div><div><dt>TCP flags</dt><dd>{selected.tcpFlags ?? 'Not retained / not TCP'}</dd></div></dl>
+              <h3>HEX PREVIEW</h3><pre>{selected.payloadPreview ?? 'Payload preview was disabled for this import.'}</pre>
+            </> : <p>Select a packet to inspect it.</p>}
+          </aside>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ImportDialog(props: {
   stage: ImportStage
   kind: 'csv' | 'pcap'
@@ -1279,11 +1368,13 @@ function ImportDialog(props: {
   error: string
   summary: string
   mergeWithExisting: boolean
+  pcapOptions: PcapImportOptions
   onClose: () => void
   onSelect: () => void
   onBrowserFile: (file: File | undefined) => void
   onMapping: (mapping: ImportMapping) => void
   onMergeWithExisting: (merge: boolean) => void
+  onPcapOptions: (options: PcapImportOptions) => void
   onNext: () => void
   onImport: () => void
   onCancel: () => void
@@ -1321,7 +1412,7 @@ function ImportDialog(props: {
           </div>
           {props.preview && <div className="preview-wrap"><div className="preview-heading"><strong>Data preview</strong><span>{props.preview.headers.length} columns</span></div><table><thead><tr>{props.preview.headers.slice(0, 5).map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{props.preview.rows.slice(0, 3).map((row, index) => <tr key={index}>{props.preview?.headers.slice(0, 5).map((header) => <td key={header}>{row[header]}</td>)}</tr>)}</tbody></table></div>}
           {props.error && <div className="error-box">{props.error}</div>}
-          <footer><button onClick={props.onClose}>Cancel</button><button className="primary" disabled={!props.paths.length} onClick={props.kind === 'csv' ? props.onNext : props.onImport}>Continue</button></footer>
+          <footer><button onClick={props.onClose}>Cancel</button><button className="primary" disabled={!props.paths.length} onClick={props.onNext}>Continue</button></footer>
         </>}
 
         {props.stage === 'mapping' && props.preview && props.mapping && <>
@@ -1335,6 +1426,26 @@ function ImportDialog(props: {
           </div>
           <div className="mapping-note">Custom mappings apply to this import only. Raw files are never modified.</div>
           <footer><button onClick={props.onClose}>Cancel</button><button className="primary" disabled={!props.mapping.sourceIp || !props.mapping.destinationIp} onClick={props.onImport}>Import records</button></footer>
+        </>}
+
+        {props.stage === 'mapping' && props.kind === 'pcap' && <>
+          <div className="inspection-profile">
+            <button type="button" className={!props.pcapOptions.packetIndexing ? 'active' : ''} onClick={() => props.onPcapOptions({ ...defaultPcapOptions })}>
+              <strong>Fast topology</strong><span>Best for large captures</span><small>Streams packets directly into aggregated flows. No per-packet database.</small>
+            </button>
+            <button type="button" className={props.pcapOptions.packetIndexing ? 'active' : ''} onClick={() => props.onPcapOptions({ ...props.pcapOptions, packetIndexing: true, tcpFlags: true })}>
+              <strong>Deep inspection</strong><span>Packet-by-packet index</span><small>Uses more time and disk space. Enables the Packet inspection tab.</small>
+            </button>
+          </div>
+          <div className="inspection-options">
+            <h3>Inspection options</h3>
+            <label className="check"><input type="checkbox" checked={props.pcapOptions.macAddresses} onChange={(event) => props.onPcapOptions({ ...props.pcapOptions, macAddresses: event.target.checked })} /> MAC addresses and offline vendor lookup</label>
+            <label className="check"><input type="checkbox" checked={props.pcapOptions.dnsHostnames} onChange={(event) => props.onPcapOptions({ ...props.pcapOptions, dnsHostnames: event.target.checked })} /> Passive DNS/mDNS hostname extraction</label>
+            <label className="check"><input type="checkbox" disabled={!props.pcapOptions.packetIndexing} checked={props.pcapOptions.packetIndexing && props.pcapOptions.tcpFlags} onChange={(event) => props.onPcapOptions({ ...props.pcapOptions, tcpFlags: event.target.checked })} /> TCP flags (SYN, ACK, FIN, RST, PSH, URG)</label>
+            <label className="check"><input type="checkbox" disabled={!props.pcapOptions.packetIndexing} checked={props.pcapOptions.payloadPreviewBytes > 0} onChange={(event) => props.onPcapOptions({ ...props.pcapOptions, payloadPreviewBytes: event.target.checked ? 96 : 0 })} /> Retain first 96 frame bytes as hexadecimal preview</label>
+            <p className="mapping-note">Payload preview is disabled by default because it can retain sensitive content. Imported bytes are displayed as data and are never executed.</p>
+          </div>
+          <footer><button onClick={() => props.onClose()}>Cancel</button><button className="primary" onClick={props.onImport}>Import capture</button></footer>
         </>}
 
         {props.stage === 'progress' && <>

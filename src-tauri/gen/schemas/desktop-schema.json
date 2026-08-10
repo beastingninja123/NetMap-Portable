@@ -267,6 +267,12 @@
           "markdownDescription": "Enables the query_graph command without any pre-configured scope."
         },
         {
+          "description": "Enables the query_packets command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-query-packets",
+          "markdownDescription": "Enables the query_packets command without any pre-configured scope."
+        },
+        {
           "description": "Enables the rename_project command without any pre-configured scope.",
           "type": "string",
           "const": "allow-rename-project",
@@ -391,6 +397,12 @@
           "type": "string",
           "const": "deny-query-graph",
           "markdownDescription": "Denies the query_graph command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the query_packets command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-query-packets",
+          "markdownDescription": "Denies the query_packets command without any pre-configured scope."
         },
         {
           "description": "Denies the rename_project command without any pre-configured scope.",

@@ -12,6 +12,8 @@ import type {
   ImportResult,
   NetworkDataset,
   NetworkNode,
+  PacketPage,
+  PcapImportOptions,
   SavedView,
   SecurityZone,
   TestCapture,
@@ -75,6 +77,8 @@ interface NativeGraph {
     id: number
     ip: string
     hostname?: string
+    mac?: string
+    vendor?: string
     totalBytes: number
     totalPackets: number
     firstSeen?: number
@@ -202,6 +206,8 @@ function graphToDataset(graph: NativeGraph): NetworkDataset {
       label: node.hostname ?? node.ip,
       ip: node.ip,
       hostname: node.hostname,
+      mac: node.mac,
+      vendor: node.vendor,
       subnet: subnetFor(node.ip),
       kind: isInternal(node.ip) ? 'internal' : 'external',
       bytes: node.totalBytes,
@@ -478,6 +484,7 @@ export async function importCapture(
   mergeWithExisting: boolean,
   onProgress: (progress: ImportProgress) => void,
   signal: AbortSignal,
+  pcapOptions?: PcapImportOptions,
 ): Promise<ImportResult> {
   if (isTauri()) {
     const project = await ensureProject()
@@ -510,6 +517,7 @@ export async function importCapture(
           projectId: project.id,
           path,
           ...(command === 'import_csv' && mapping ? { mapping: nativeMapping(mapping) } : {}),
+          ...(command === 'import_pcap' ? { options: pcapOptions } : {}),
         })
         completedImportIds.push(result.importId)
         accepted += result.accepted
@@ -563,6 +571,12 @@ export async function importCapture(
     })
   }
   return { importedRows: 18_436, skippedRows: 44, warnings: ['44 incomplete flows were skipped.'], dataset: demoDataset }
+}
+
+export async function queryPackets(offset = 0, search = ''): Promise<PacketPage> {
+  if (!isTauri()) return { packets: [], total: 0 }
+  const project = await ensureProject()
+  return invoke<PacketPage>('query_packets', { projectId: project.id, limit: 250, offset, search: search || null })
 }
 
 export async function getDiagnostics(dataset: NetworkDataset): Promise<Diagnostics> {

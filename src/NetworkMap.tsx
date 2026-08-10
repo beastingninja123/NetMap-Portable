@@ -34,6 +34,7 @@ interface Props {
   nodeSpacing: number
   groupSubnets: boolean
   groupZones: boolean
+  groupPurdue: boolean
   showConduits: boolean
   showAnomalies: boolean
   pathDirection: PathDirection
@@ -59,12 +60,12 @@ function classSlug(value: string): string {
 
 function compoundPositions(
   dataset: NetworkDataset,
-  groupMode: 'zone' | 'subnet',
+  groupMode: 'zone' | 'subnet' | 'purdue',
   nodeSpacing: number,
 ): Map<string, { x: number; y: number }> {
   const valueFor = (node: NetworkNode) => groupMode === 'zone'
     ? node.securityZone ?? 'Unassigned'
-    : node.subnet
+    : groupMode === 'purdue' ? node.purdueLevel ?? 'External / unassigned' : node.subnet
   const values = [...new Set(dataset.nodes.map(valueFor))].sort()
   const groupColumns = Math.max(1, Math.ceil(Math.sqrt(values.length)))
   const groupStride = Math.max(210, nodeSpacing * 3)
@@ -91,6 +92,7 @@ function elementsFor(
   dataset: NetworkDataset,
   grouped: boolean,
   groupZones: boolean,
+  groupPurdue: boolean,
   nodeSpacing: number,
   showConduits: boolean,
   showAnomalies: boolean,
@@ -101,10 +103,12 @@ function elementsFor(
   expandedPairId: string | null,
 ): ElementDefinition[] {
   const nodeById = new Map(dataset.nodes.map((node) => [node.id, node]))
-  const groupMode = groupZones ? 'zone' : grouped ? 'subnet' : null
+  const groupMode = groupPurdue ? 'purdue' : groupZones ? 'zone' : grouped ? 'subnet' : null
   const presetPositions = groupMode ? compoundPositions(dataset, groupMode, nodeSpacing) : null
   const groupValues = groupMode === 'zone'
     ? [...new Set(dataset.nodes.map((node) => node.securityZone ?? 'Unassigned'))]
+    : groupMode === 'purdue'
+      ? [...new Set(dataset.nodes.map((node) => node.purdueLevel ?? 'External / unassigned'))]
     : groupMode === 'subnet'
       ? [...new Set(dataset.nodes.map((node) => node.subnet))]
       : []
@@ -114,7 +118,7 @@ function elementsFor(
         label: value,
         group: true,
         groupKind: groupMode,
-        zoneColor: groupMode === 'zone' ? ZONE_COLORS[value as SecurityZone] : '#31516e',
+        zoneColor: groupMode === 'zone' ? ZONE_COLORS[value as SecurityZone] : groupMode === 'purdue' ? '#2f7f91' : '#31516e',
       },
       classes: `subnet ${groupMode === 'zone' ? 'zone-group' : 'subnet-group'}`,
     }))
@@ -123,10 +127,14 @@ function elementsFor(
       ...node,
       parent: groupMode === 'zone'
         ? `group-zone-${classSlug(node.securityZone ?? 'Unassigned')}`
+        : groupMode === 'purdue'
+          ? `group-purdue-${classSlug(node.purdueLevel ?? 'External / unassigned')}`
         : groupMode === 'subnet'
           ? `group-subnet-${classSlug(node.subnet)}`
           : undefined,
-      displayLabel: showHostnames && node.hostname ? `${node.hostname}\n${node.ip}` : node.ip,
+      displayLabel: showHostnames && (node.hostname || node.vendor)
+        ? `${node.hostname ?? node.vendor}\n${node.ip}`
+        : node.ip,
       zoneColor: ZONE_COLORS[node.securityZone ?? 'Unassigned'],
     },
     classes: [
@@ -279,6 +287,7 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
     nodeSpacing,
     groupSubnets,
     groupZones,
+    groupPurdue,
     showConduits,
     showAnomalies,
     pathDirection,
@@ -344,8 +353,8 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
       if (!cy) return
       cy.nodes().unselect()
       clearNeighborhoodHighlight(cy)
-      if (groupZones || groupSubnets) {
-        const groupMode = groupZones ? 'zone' : 'subnet'
+      if (groupPurdue || groupZones || groupSubnets) {
+        const groupMode = groupPurdue ? 'purdue' : groupZones ? 'zone' : 'subnet'
         const positions = compoundPositions(datasetRef.current, groupMode, nodeSpacingRef.current)
         cy.nodes().not('.subnet').forEach((node) => {
           const position = positions.get(node.id())
@@ -366,7 +375,7 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
       anchor.download = 'netmap-topology.png'
       anchor.click()
     },
-  }), [groupSubnets, groupZones, layout])
+  }), [groupSubnets, groupZones, groupPurdue, layout])
 
   // Remount only when layout/grouping changes (structural).
   useEffect(() => {
@@ -380,6 +389,7 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
         dataset,
         groupSubnets,
         groupZones,
+        groupPurdue,
         nodeSpacingRef.current,
         showConduits,
         showAnomalies,
@@ -389,7 +399,7 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
         aggregatedEdges,
         expandedPairId,
       ),
-      layout: groupSubnets || groupZones
+      layout: groupSubnets || groupZones || groupPurdue
         ? { name: 'preset', animate: false, fit: true, padding: 36 }
         : layoutOptions(layout, nodeSpacingRef.current),
       minZoom: 0.1,
@@ -566,7 +576,7 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
       if (!tooltip) return
       const item = event.target.data()
       tooltip.textContent = event.target.isNode()
-        ? `${item.hostname ? `${item.hostname} · ` : ''}${item.ip ?? item.subnet}`
+        ? `${item.hostname ? `${item.hostname} · ` : item.vendor ? `${item.vendor} · ` : ''}${item.ip ?? item.subnet}`
         : String(item.tip ?? item.label ?? '')
       tooltip.hidden = false
     })
@@ -587,7 +597,7 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
       cyRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remount only for layout / compound grouping
-  }, [groupSubnets, groupZones, layout])
+  }, [groupSubnets, groupZones, groupPurdue, layout])
 
   // Reflow after the spacing slider settles; keep the current orientation and fit the result.
   useEffect(() => {
@@ -596,8 +606,8 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
     const timeout = window.setTimeout(() => {
       if (!cyRef.current || cyRef.current !== cy) return
       lastAppliedSpacingRef.current = nodeSpacing
-      if (groupZones || groupSubnets) {
-        const groupMode = groupZones ? 'zone' : 'subnet'
+      if (groupPurdue || groupZones || groupSubnets) {
+        const groupMode = groupPurdue ? 'purdue' : groupZones ? 'zone' : 'subnet'
         const positions = compoundPositions(datasetRef.current, groupMode, nodeSpacing)
         cy.nodes().not('.subnet').forEach((node) => {
           const position = positions.get(node.id())
@@ -611,7 +621,7 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
       applyAdaptiveLabelScale(cy, true)
     }, 120)
     return () => window.clearTimeout(timeout)
-  }, [groupSubnets, groupZones, layout, nodeSpacing])
+  }, [groupSubnets, groupZones, groupPurdue, layout, nodeSpacing])
 
   // Incremental element refresh — preserves pinned positions during live capture.
   useEffect(() => {
@@ -625,6 +635,7 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
       dataset,
       groupSubnets,
       groupZones,
+      groupPurdue,
       nodeSpacingRef.current,
       showConduits,
       showAnomalies,
@@ -635,7 +646,7 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
       expandedPairId,
     )
     const synced = syncGraphElements(cy, elements, positionCacheRef.current)
-    if (synced.brandNewCount >= 3 && !groupSubnets && !groupZones) {
+    if (synced.brandNewCount >= 3 && !groupSubnets && !groupZones && !groupPurdue) {
       cy.layout(layoutOptions(layout, nodeSpacingRef.current, synced.retainedNodeCount === 0)).run()
       cy.fit(undefined, 48)
       rememberPositions(cy, positionCacheRef.current)
@@ -648,6 +659,7 @@ const NetworkMap = forwardRef<NetworkMapHandle, Props>(function NetworkMap(
     expandedPairId,
     groupSubnets,
     groupZones,
+    groupPurdue,
     layout,
     showAnomalies,
     showConduits,

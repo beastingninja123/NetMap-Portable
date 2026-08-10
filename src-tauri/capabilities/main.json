@@ -18,6 +18,7 @@
     "allow-import-pcap",
     "allow-cancel-import",
     "allow-query-graph",
+    "allow-query-packets",
     "allow-delete-import",
     "allow-retain-imports",
     "allow-save-view",

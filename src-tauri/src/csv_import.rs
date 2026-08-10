@@ -324,6 +324,7 @@ impl MappingIndexes {
         Ok(FlowRecord {
             source_ip: source.to_string(),
             destination_ip: destination.to_string(),
+            source_mac: None,
             source_port: parse_optional(row, self.source_port, "source port")?,
             destination_port: parse_optional(row, self.destination_port, "destination port")?,
             protocol: self
@@ -335,6 +336,7 @@ impl MappingIndexes {
             timestamp: parse_timestamp(row, self.timestamp)?,
             bytes: parse_optional::<u64>(row, self.bytes, "bytes")?.unwrap_or(0),
             packets: parse_optional::<u64>(row, self.packets, "packets")?.unwrap_or(1),
+            packet: None,
         })
     }
 }

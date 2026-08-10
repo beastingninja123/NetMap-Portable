@@ -2,6 +2,38 @@
 
 All notable changes to NetMap Portable are documented in this file.
 
+## 0.5.0 — 2026-08-10
+
+### Added
+- Fast topology and opt-in deep-inspection profiles for PCAP imports
+- Dedicated Packet inspection workspace with search, pagination, endpoint and
+  port metadata, frame lengths, timestamps, and optional hexadecimal previews
+- Individually configurable MAC collection, passive DNS naming, TCP flags, and
+  bounded frame previews; sensitive byte previews remain disabled by default
+- Ethernet MAC extraction and offline vendor identification using bundled
+  IEEE MA-L, MA-M, and MA-S assignment data
+- MAC and vendor display in device details and topology labels, plus MAC/vendor
+  search and CSV export fields
+- Inferred Purdue Model levels with an optional Purdue-organized topology
+
+### Changed
+- PCAP imports can retain per-packet metadata when deep inspection is enabled,
+  while the default fast profile keeps the existing low-overhead flow path
+- Import controls now explain the performance, storage, and privacy tradeoffs
+  of every inspection option before processing begins
+- Device inspection surfaces hardware identity and Purdue placement alongside
+  the existing OT role and IEC 62443 zone information
+
+### Security and privacy
+- Locally administered, multicast, broadcast, and invalid MAC addresses do not
+  receive speculative vendor assignments
+- Frame previews are capped at 256 bytes by the backend and imported content is
+  treated only as data; it is never executed
+
+### Validation
+- Added backend coverage for vendor matching, MAC normalization, deep packet
+  persistence, packet queries, and bounded frame previews
+
 ## 0.4.0 — 2026-08-07
 
 ### Added

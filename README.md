@@ -19,8 +19,13 @@ Npcap, or a system-wide database.
 - Zeek-style CSV (`id.orig_h`, `id.resp_h`, `id.orig_p`, `id.resp_p`)
 - Arbitrary connection CSV through the column-mapping wizard
 
-Only connection metadata is retained. Packet payloads are not stored or
-displayed.
+PCAP imports offer two local processing profiles. **Fast topology** retains
+only aggregated connection metadata for large captures. **Deep inspection**
+also indexes supported IP packets for the Packet inspection tab. MAC
+addresses, passive DNS names, TCP flags, and a bounded hexadecimal frame
+preview can be enabled or disabled independently. Frame previews are off by
+default because captured bytes can contain sensitive content; imported bytes
+are displayed only as data and are never executed.
 
 ## Map interaction
 
@@ -32,6 +37,11 @@ displayed.
 - Standard and OT / ICS protocols can be filtered independently or combined.
 - OT roles and IEC 62443-style security zones are inferred locally and can be
   overridden per host. Cross-zone links can be highlighted as conduits.
+- Ethernet captures associate locally sourced IPs with observed MAC addresses
+  and identify globally assigned vendors from a bundled offline IEEE registry
+  snapshot. Private and multicast MACs do not receive speculative vendor names.
+- Organize the topology by subnet, IEC 62443-style zone, or inferred Purdue
+  Model level.
 - Baseline analysis flags later host pairs, protocols, ports, and traffic
   spikes; timeline playback reveals flows by their first-seen timestamp.
 - Hover tracing can follow both directions, outbound traffic, or inbound

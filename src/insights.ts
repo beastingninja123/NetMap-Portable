@@ -6,6 +6,7 @@ import type {
   NetworkNode,
   PathDirection,
   SecurityZone,
+  PurdueLevel,
 } from './types'
 
 export const ASSET_ROLES: AssetRole[] = [
@@ -101,6 +102,18 @@ export function inferSecurityZone(node: NetworkNode, role: AssetRole): SecurityZ
   return 'Unassigned'
 }
 
+export function inferPurdueLevel(node: NetworkNode, role: AssetRole, zone: SecurityZone): PurdueLevel {
+  if (node.kind === 'external' || zone === 'External') return 'External / unassigned'
+  if (zone === 'DMZ') return 'Level 3.5 · Industrial DMZ'
+  if (role === 'Field Device' || role === 'RTU') return 'Level 0 · Process'
+  if (role === 'PLC' || role === 'Building Controller' || role === 'Safety System') return 'Level 1 · Control'
+  if (role === 'HMI' || role === 'Engineering Workstation') return 'Level 2 · Supervisory'
+  if (role === 'Historian' || role === 'OPC Gateway' || zone === 'Operations') return 'Level 3 · Operations'
+  if (role === 'Server') return 'Level 4 · Site business'
+  if (role === 'Workstation' || zone === 'Enterprise') return 'Level 5 · Enterprise'
+  return 'External / unassigned'
+}
+
 export function enrichAssetMetadata(dataset: NetworkDataset): NetworkDataset {
   const nodes = dataset.nodes.map((node) => {
     const inferredRole = inferAssetRole(node, dataset.edges)
@@ -115,6 +128,7 @@ export function enrichAssetMetadata(dataset: NetworkDataset): NetworkDataset {
       assetRoleSource: node.assetRoleSource === 'manual' ? 'manual' as const : 'inferred' as const,
       securityZone,
       securityZoneSource: node.securityZoneSource === 'manual' ? 'manual' as const : 'inferred' as const,
+      purdueLevel: inferPurdueLevel(node, assetRole, securityZone),
     }
   })
   return { ...dataset, nodes }

@@ -6,6 +6,7 @@ mod live_capture;
 mod models;
 mod pcap_import;
 mod storage;
+mod vendor;
 
 use commands::AppState;
 
@@ -52,6 +53,7 @@ pub fn run() {
             commands::import_pcap,
             commands::cancel_import,
             commands::query_graph,
+            commands::query_packets,
             commands::delete_import,
             commands::retain_imports,
             commands::save_view,

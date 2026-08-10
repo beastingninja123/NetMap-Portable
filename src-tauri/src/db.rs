@@ -33,6 +33,30 @@ CREATE TABLE IF NOT EXISTS hostnames (
   hostname TEXT NOT NULL,
   last_seen INTEGER
 );
+CREATE TABLE IF NOT EXISTS mac_observations (
+  ip TEXT NOT NULL,
+  mac TEXT NOT NULL,
+  packets INTEGER NOT NULL DEFAULT 0,
+  last_seen INTEGER,
+  PRIMARY KEY(ip,mac)
+);
+CREATE TABLE IF NOT EXISTS packets (
+  id INTEGER PRIMARY KEY,
+  import_id TEXT NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
+  packet_number INTEGER NOT NULL,
+  timestamp INTEGER,
+  source_ip TEXT NOT NULL,
+  destination_ip TEXT NOT NULL,
+  source_mac TEXT,
+  destination_mac TEXT,
+  source_port INTEGER,
+  destination_port INTEGER,
+  protocol TEXT NOT NULL,
+  length INTEGER NOT NULL,
+  tcp_flags TEXT,
+  payload_preview TEXT,
+  UNIQUE(import_id,packet_number)
+);
 CREATE TABLE IF NOT EXISTS flows (
   id INTEGER PRIMARY KEY,
   source_node_id INTEGER NOT NULL REFERENCES nodes(id),
@@ -86,6 +110,9 @@ CREATE INDEX IF NOT EXISTS idx_flows_protocol ON flows(protocol);
 CREATE INDEX IF NOT EXISTS idx_flows_time ON flows(first_seen,last_seen);
 CREATE INDEX IF NOT EXISTS idx_flow_imports_import ON flow_imports(import_id);
 CREATE INDEX IF NOT EXISTS idx_notes_node ON notes(node_id);
+CREATE INDEX IF NOT EXISTS idx_mac_observations_ip ON mac_observations(ip,packets DESC);
+CREATE INDEX IF NOT EXISTS idx_packets_import_number ON packets(import_id,packet_number);
+CREATE INDEX IF NOT EXISTS idx_packets_ips ON packets(source_ip,destination_ip);
 "#;
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -134,6 +161,11 @@ pub fn insert_batch(
             "INSERT INTO nodes(ip,ip_version) VALUES(?1,?2) ON CONFLICT(ip) DO NOTHING",
         )?;
         let mut select_node = transaction.prepare_cached("SELECT id FROM nodes WHERE ip=?1")?;
+        let mut upsert_mac = transaction.prepare_cached(
+            "INSERT INTO mac_observations(ip,mac,packets,last_seen) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(ip,mac) DO UPDATE SET packets=packets+excluded.packets,
+               last_seen=CASE WHEN excluded.last_seen IS NULL THEN last_seen WHEN last_seen IS NULL THEN excluded.last_seen ELSE max(last_seen,excluded.last_seen) END",
+        )?;
         let mut upsert_flow = transaction.prepare_cached(
             "INSERT INTO flows(source_node_id,destination_node_id,source_port,destination_port,protocol,bytes,packets,first_seen,last_seen)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8)
@@ -141,6 +173,10 @@ pub fn insert_batch(
              DO UPDATE SET bytes=bytes+excluded.bytes,packets=packets+excluded.packets,
                first_seen=CASE WHEN excluded.first_seen IS NULL THEN first_seen WHEN first_seen IS NULL THEN excluded.first_seen ELSE min(first_seen,excluded.first_seen) END,
                last_seen=CASE WHEN excluded.last_seen IS NULL THEN last_seen WHEN last_seen IS NULL THEN excluded.last_seen ELSE max(last_seen,excluded.last_seen) END"
+        )?;
+        let mut insert_packet = transaction.prepare_cached(
+            "INSERT OR REPLACE INTO packets(import_id,packet_number,timestamp,source_ip,destination_ip,source_mac,destination_mac,source_port,destination_port,protocol,length,tcp_flags,payload_preview)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
         )?;
         let mut select_flow = transaction.prepare_cached(
             "SELECT id FROM flows WHERE source_node_id=?1 AND destination_node_id=?2
@@ -171,6 +207,9 @@ pub fn insert_batch(
             let source_id: i64 = select_node.query_row([&flow.source_ip], |row| row.get(0))?;
             let destination_id: i64 =
                 select_node.query_row([&flow.destination_ip], |row| row.get(0))?;
+            if let Some(mac) = &flow.source_mac {
+                upsert_mac.execute(params![flow.source_ip, mac, flow.packets.min(i64::MAX as u64) as i64, flow.timestamp])?;
+            }
             let source_port = flow.source_port.map(i64::from).unwrap_or(-1);
             let destination_port = flow.destination_port.map(i64::from).unwrap_or(-1);
             let bytes = flow.bytes.min(i64::MAX as u64) as i64;
@@ -196,6 +235,23 @@ pub fn insert_batch(
                 |row| row.get(0),
             )?;
             upsert_import.execute(params![flow_id, import_id, bytes, packets, flow.timestamp])?;
+            if let Some(packet) = &flow.packet {
+                insert_packet.execute(params![
+                    import_id,
+                    packet.packet_number.min(i64::MAX as u64) as i64,
+                    packet.timestamp,
+                    packet.source_ip,
+                    packet.destination_ip,
+                    packet.source_mac,
+                    packet.destination_mac,
+                    packet.source_port.map(i64::from),
+                    packet.destination_port.map(i64::from),
+                    packet.protocol,
+                    packet.length.min(i64::MAX as u64) as i64,
+                    packet.tcp_flags,
+                    packet.payload_preview,
+                ])?;
+            }
         }
     }
     transaction.commit()?;
@@ -282,6 +338,9 @@ fn reconcile_import_totals(connection: &Connection) -> Result<()> {
          );
          DELETE FROM hostnames WHERE NOT EXISTS(
            SELECT 1 FROM nodes WHERE nodes.ip=hostnames.ip
+         );
+         DELETE FROM mac_observations WHERE NOT EXISTS(
+           SELECT 1 FROM nodes WHERE nodes.ip=mac_observations.ip
          );",
     )?;
     rebuild_node_totals(connection)?;
@@ -386,6 +445,7 @@ pub fn query_graph(connection: &Connection, filters: &GraphFilters) -> Result<Gr
     let mut nodes_by_id = HashMap::new();
     let mut node_statement = connection.prepare(
         "SELECT n.id,n.ip,(SELECT h.hostname FROM hostnames h WHERE h.ip=n.ip),
+           (SELECT m.mac FROM mac_observations m WHERE m.ip=n.ip ORDER BY m.packets DESC,m.last_seen DESC LIMIT 1),
            n.ip_version,n.total_bytes,n.total_packets,
            (SELECT min(f.first_seen) FROM flows f WHERE f.source_node_id=n.id OR f.destination_node_id=n.id),
            (SELECT max(f.last_seen) FROM flows f WHERE f.source_node_id=n.id OR f.destination_node_id=n.id),
@@ -410,16 +470,18 @@ pub fn query_graph(connection: &Connection, filters: &GraphFilters) -> Result<Gr
                     id: row.get(0)?,
                     ip: row.get(1)?,
                     hostname: row.get(2)?,
-                    version: row.get(3)?,
-                    total_bytes: row.get(4)?,
-                    total_packets: row.get(5)?,
-                    first_seen: row.get(6)?,
-                    last_seen: row.get(7)?,
-                    imports: parse_json_list(row.get::<_, String>(8)?),
-                    tags: parse_json_list(row.get::<_, String>(9)?),
-                    notes: row.get(10)?,
-                    asset_role: row.get(11)?,
-                    security_zone: row.get(12)?,
+                    mac: row.get(3)?,
+                    vendor: row.get::<_, Option<String>>(3)?.and_then(|mac| crate::vendor::lookup(&mac).map(str::to_owned)),
+                    version: row.get(4)?,
+                    total_bytes: row.get(5)?,
+                    total_packets: row.get(6)?,
+                    first_seen: row.get(7)?,
+                    last_seen: row.get(8)?,
+                    imports: parse_json_list(row.get::<_, String>(9)?),
+                    tags: parse_json_list(row.get::<_, String>(10)?),
+                    notes: row.get(11)?,
+                    asset_role: row.get(12)?,
+                    security_zone: row.get(13)?,
                 })
             })
             .optional()?
@@ -436,6 +498,36 @@ pub fn query_graph(connection: &Connection, filters: &GraphFilters) -> Result<Gr
 
 fn parse_json_list(value: String) -> Vec<String> {
     serde_json::from_str(&value).unwrap_or_default()
+}
+
+pub fn query_packets(connection: &Connection, limit: u32, offset: u64, search: Option<&str>) -> Result<crate::models::PacketPage> {
+    let limit = limit.clamp(1, 1_000);
+    let pattern = search.filter(|value| !value.trim().is_empty()).map(|value| format!("%{}%", value.trim()));
+    let where_sql = if pattern.is_some() {
+        "WHERE source_ip LIKE ?1 OR destination_ip LIKE ?1 OR source_mac LIKE ?1 OR destination_mac LIKE ?1 OR protocol LIKE ?1"
+    } else { "" };
+    let total: i64 = if let Some(pattern) = &pattern {
+        connection.query_row(&format!("SELECT count(*) FROM packets {where_sql}"), [pattern], |row| row.get(0))?
+    } else {
+        connection.query_row("SELECT count(*) FROM packets", [], |row| row.get(0))?
+    };
+    let sql = format!("SELECT packet_number,timestamp,source_ip,destination_ip,source_mac,destination_mac,source_port,destination_port,protocol,length,tcp_flags,payload_preview FROM packets {where_sql} ORDER BY timestamp,packet_number LIMIT ?{} OFFSET ?{}", if pattern.is_some() {2} else {1}, if pattern.is_some() {3} else {2});
+    let mut statement = connection.prepare(&sql)?;
+    let mapper = |row: &rusqlite::Row<'_>| Ok(crate::models::PacketRecord {
+        packet_number: row.get::<_, i64>(0)?.max(0) as u64,
+        timestamp: row.get(1)?, source_ip: row.get(2)?, destination_ip: row.get(3)?,
+        source_mac: row.get(4)?, destination_mac: row.get(5)?,
+        source_port: row.get::<_, Option<i64>>(6)?.and_then(|value| u16::try_from(value).ok()),
+        destination_port: row.get::<_, Option<i64>>(7)?.and_then(|value| u16::try_from(value).ok()),
+        protocol: row.get(8)?, length: row.get::<_, i64>(9)?.max(0) as u64,
+        tcp_flags: row.get(10)?, payload_preview: row.get(11)?,
+    });
+    let packets = if let Some(pattern) = &pattern {
+        statement.query_map(params![pattern, i64::from(limit), offset.min(i64::MAX as u64) as i64], mapper)?.collect::<std::result::Result<Vec<_>, _>>()?
+    } else {
+        statement.query_map(params![i64::from(limit), offset.min(i64::MAX as u64) as i64], mapper)?.collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    Ok(crate::models::PacketPage { packets, total: total.max(0) as u64 })
 }
 
 pub fn save_view(
@@ -558,12 +650,14 @@ mod tests {
         let flow = FlowRecord {
             source_ip: "10.0.0.1".into(),
             destination_ip: "10.0.0.2".into(),
+            source_mac: None,
             source_port: Some(10),
             destination_port: Some(443),
             protocol: "TCP".into(),
             bytes: 100,
             packets: 1,
             timestamp: Some(1),
+            packet: None,
         };
         insert_batch(&mut connection, "one", &[flow.clone(), flow]).unwrap();
         upsert_hostnames(
@@ -615,22 +709,26 @@ mod tests {
         let first = FlowRecord {
             source_ip: "10.0.0.1".into(),
             destination_ip: "10.0.0.2".into(),
+            source_mac: None,
             source_port: Some(40_001),
             destination_port: Some(502),
             protocol: "TCP".into(),
             bytes: 100,
             packets: 1,
             timestamp: Some(1),
+            packet: None,
         };
         let second = FlowRecord {
             source_ip: "10.10.0.1".into(),
             destination_ip: "10.10.0.2".into(),
+            source_mac: None,
             source_port: Some(40_002),
             destination_port: Some(20_000),
             protocol: "TCP".into(),
             bytes: 200,
             packets: 2,
             timestamp: Some(2),
+            packet: None,
         };
         start_import(&connection, "old", "pcap", "old.pcap").unwrap();
         insert_batch(&mut connection, "old", &[first]).unwrap();

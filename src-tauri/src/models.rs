@@ -64,6 +64,52 @@ pub struct ImportResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PcapImportOptions {
+    pub packet_indexing: bool,
+    pub mac_addresses: bool,
+    pub dns_hostnames: bool,
+    pub tcp_flags: bool,
+    pub payload_preview_bytes: u16,
+}
+
+impl Default for PcapImportOptions {
+    fn default() -> Self {
+        Self {
+            packet_indexing: false,
+            mac_addresses: true,
+            dns_hostnames: true,
+            tcp_flags: false,
+            payload_preview_bytes: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PacketRecord {
+    pub packet_number: u64,
+    pub timestamp: Option<i64>,
+    pub source_ip: String,
+    pub destination_ip: String,
+    pub source_mac: Option<String>,
+    pub destination_mac: Option<String>,
+    pub source_port: Option<u16>,
+    pub destination_port: Option<u16>,
+    pub protocol: String,
+    pub length: u64,
+    pub tcp_flags: Option<String>,
+    pub payload_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PacketPage {
+    pub packets: Vec<PacketRecord>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptureInterface {
     pub id: String,
@@ -126,6 +172,8 @@ pub struct GraphNode {
     pub id: i64,
     pub ip: String,
     pub hostname: Option<String>,
+    pub mac: Option<String>,
+    pub vendor: Option<String>,
     pub version: i64,
     pub total_bytes: i64,
     pub total_packets: i64,
@@ -183,10 +231,12 @@ pub struct SavedViewRecord {
 pub struct FlowRecord {
     pub source_ip: String,
     pub destination_ip: String,
+    pub source_mac: Option<String>,
     pub source_port: Option<u16>,
     pub destination_port: Option<u16>,
     pub protocol: String,
     pub bytes: u64,
     pub packets: u64,
     pub timestamp: Option<i64>,
+    pub packet: Option<PacketRecord>,
 }

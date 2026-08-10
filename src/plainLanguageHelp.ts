@@ -56,7 +56,7 @@ export const ZONE_HELP: Record<SecurityZone, string> = {
 export const CONTROL_HELP = {
   interface: 'The network adapter NetMap listens to, such as Ethernet or Wi-Fi. Only traffic visible to that adapter can be captured.',
   bpf: 'BPF means Berkeley Packet Filter. It limits what is recorded before capture, for example “host 10.0.0.1” or “port 502”.',
-  search: 'Show IP addresses, hostnames, or IPv4 CIDR ranges that match. Separate several searches with commas, spaces, or semicolons.',
+  search: 'Show IP addresses, hostnames, MAC addresses, hardware vendors, or IPv4 CIDR ranges that match. Separate several searches with commas, spaces, or semicolons.',
   time: 'Keep only conversations observed inside this date-and-time range.',
   port: 'A port is a numbered service door on a host. For example, Modbus/TCP commonly uses port 502.',
   protocol: 'A protocol is the agreed set of rules two systems use to communicate. Select several to show traffic matching any selected protocol.',

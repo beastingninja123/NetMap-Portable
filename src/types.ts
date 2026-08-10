@@ -26,6 +26,8 @@ export interface NetworkNode {
   label: string
   ip: string
   hostname?: string
+  mac?: string
+  vendor?: string
   subnet: string
   kind: 'internal' | 'external'
   bytes: number
@@ -39,6 +41,7 @@ export interface NetworkNode {
   assetRoleSource?: 'inferred' | 'manual'
   securityZone?: SecurityZone
   securityZoneSource?: 'inferred' | 'manual'
+  purdueLevel?: PurdueLevel
   anomalyCount?: number
 }
 
@@ -99,6 +102,7 @@ export type SecurityZone =
   | 'Field'
   | 'External'
   | 'Unassigned'
+export type PurdueLevel = 'Level 5 · Enterprise' | 'Level 4 · Site business' | 'Level 3.5 · Industrial DMZ' | 'Level 3 · Operations' | 'Level 2 · Supervisory' | 'Level 1 · Control' | 'Level 0 · Process' | 'External / unassigned'
 export type AnomalyKind = 'new-pair' | 'new-protocol' | 'new-port' | 'traffic-spike'
 
 export interface NetworkDataset {
@@ -147,6 +151,34 @@ export interface ImportProgress {
   phase: string
   percent: number
   processed: number
+  total: number
+}
+
+export interface PcapImportOptions {
+  packetIndexing: boolean
+  macAddresses: boolean
+  dnsHostnames: boolean
+  tcpFlags: boolean
+  payloadPreviewBytes: number
+}
+
+export interface PacketRecord {
+  packetNumber: number
+  timestamp?: number
+  sourceIp: string
+  destinationIp: string
+  sourceMac?: string
+  destinationMac?: string
+  sourcePort?: number
+  destinationPort?: number
+  protocol: string
+  length: number
+  tcpFlags?: string
+  payloadPreview?: string
+}
+
+export interface PacketPage {
+  packets: PacketRecord[]
   total: number
 }
 

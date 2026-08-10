@@ -5,7 +5,7 @@ use crate::live_capture::{self, LiveSession};
 use crate::models::{
     CaptureInterfacesResponse, CsvMapping, CsvPreview, Diagnostics, GraphFilters, GraphResult,
     ImportProgress, ImportResult, LiveCaptureSession, LiveCaptureUpdate, ProjectInfo,
-    SavedViewRecord, TestCapture,
+    PacketPage, PcapImportOptions, SavedViewRecord, TestCapture,
 };
 use crate::pcap_import;
 use crate::storage::Storage;
@@ -113,6 +113,7 @@ pub async fn import_pcap(
     app: AppHandle,
     project_id: String,
     path: String,
+    options: Option<PcapImportOptions>,
     state: State<'_, AppState>,
 ) -> Result<ImportResult> {
     let path = require_existing_file(&path, &["pcap", "pcapng"])?;
@@ -124,10 +125,27 @@ pub async fn import_pcap(
         state.cancellations.clone(),
         move |token, id, progress| {
             let mut connection = db::open(&database)?;
-            pcap_import::import(&mut connection, &path, id, token.as_ref(), progress)
+            pcap_import::import(&mut connection, &path, id, token.as_ref(), &options.unwrap_or_default(), progress)
         },
     )
     .await
+}
+
+#[tauri::command]
+pub async fn query_packets(
+    project_id: String,
+    limit: Option<u32>,
+    offset: Option<u64>,
+    search: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<PacketPage> {
+    let database = state.storage.database_path(&project_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = db::open(&database)?;
+        db::query_packets(&connection, limit.unwrap_or(250), offset.unwrap_or(0), search.as_deref())
+    })
+    .await
+    .map_err(|error| AppError::Invalid(format!("packet query worker failed: {error}")))?
 }
 
 async fn run_import<F>(

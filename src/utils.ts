@@ -81,6 +81,8 @@ function nodeMatchesTerms(node: NetworkNode, terms: string[]): boolean {
   return terms.some((term) =>
     matchesIpOrCidr(node.ip, term)
     || node.hostname?.toLowerCase().startsWith(term)
+    || node.mac?.toLowerCase().includes(term)
+    || node.vendor?.toLowerCase().includes(term)
     || node.label.toLowerCase().startsWith(term),
   )
 }
@@ -224,11 +226,15 @@ function quoteCsv(value: unknown): string {
 }
 
 export function exportDatasetCsv(dataset: NetworkDataset): string {
-  const header = ['source_ip', 'destination_ip', 'protocol', 'port', 'bytes', 'packets', 'first_seen', 'last_seen']
+  const header = ['source_ip', 'source_mac', 'source_vendor', 'destination_ip', 'destination_mac', 'destination_vendor', 'protocol', 'port', 'bytes', 'packets', 'first_seen', 'last_seen']
   const nodes = new Map(dataset.nodes.map((node) => [node.id, node]))
   const lines = dataset.edges.map((edge) => [
     nodes.get(edge.source)?.ip ?? edge.source,
+    nodes.get(edge.source)?.mac ?? '',
+    nodes.get(edge.source)?.vendor ?? '',
     nodes.get(edge.target)?.ip ?? edge.target,
+    nodes.get(edge.target)?.mac ?? '',
+    nodes.get(edge.target)?.vendor ?? '',
     edge.protocol,
     edge.port,
     edge.bytes,

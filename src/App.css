@@ -29,6 +29,19 @@
 .workspace-tabs button:hover { color: var(--text); }
 .workspace-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
 .workspace { height: calc(100vh - 96px); display: grid; grid-template-columns: 258px minmax(400px,1fr) 300px; }
+.packet-workspace { height: calc(100vh - 96px); display:flex; flex-direction:column; background:var(--bg); overflow:hidden; }
+.packet-header { display:flex; align-items:end; justify-content:space-between; gap:24px; padding:18px 22px; border-bottom:1px solid var(--line); background:var(--panel); }
+.packet-header h2 { margin:3px 0; font-size:20px; }.packet-header p { margin:0; color:var(--muted); font-size:12px; }
+.packet-search { width:min(360px,40vw); }.packet-search span { display:block; color:var(--muted); font-size:10px; margin-bottom:5px; text-transform:uppercase; letter-spacing:.6px; }.packet-search input { width:100%; }
+.packet-grid { min-height:0; flex:1; display:grid; grid-template-columns:minmax(620px,1fr) 340px; }
+.packet-table-wrap { min-width:0; display:flex; flex-direction:column; overflow:hidden; }.packet-table { width:100%; border-collapse:collapse; font-size:11px; }.packet-table-wrap { overflow:auto; }
+.packet-table th { position:sticky; top:0; z-index:1; background:var(--panel); color:var(--muted); text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); }
+.packet-table td { padding:8px 10px; border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent); white-space:nowrap; }.packet-table tbody tr { cursor:pointer; }.packet-table tbody tr:hover,.packet-table tbody tr.selected { background:color-mix(in srgb,var(--accent) 12%,transparent); }
+.protocol-pill { color:var(--accent); font-weight:700; }.packet-pagination { position:sticky; bottom:0; display:flex; justify-content:center; align-items:center; gap:14px; padding:9px; background:var(--panel); border-top:1px solid var(--line); }
+.packet-details { overflow:auto; padding:20px; border-left:1px solid var(--line); background:var(--panel); }.packet-details h2 { margin:4px 0 18px; }.packet-details dl { display:grid; gap:12px; }.packet-details dl div { border-bottom:1px solid var(--line); padding-bottom:9px; }.packet-details dt { color:var(--muted); font-size:9px; letter-spacing:.6px; }.packet-details dd { margin:4px 0 0; overflow-wrap:anywhere; }.packet-details pre { white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; border:1px solid var(--line); border-radius:6px; background:var(--bg); font-size:10px; line-height:1.6; }
+.packet-empty { margin:auto; max-width:520px; text-align:center; padding:36px; border:1px dashed var(--line); border-radius:10px; color:var(--muted); }.packet-empty h3 { color:var(--text); }
+.inspection-profile { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:18px 0; }.inspection-profile button { text-align:left; display:grid; gap:5px; padding:16px; border:1px solid var(--line); background:var(--panel-2); }.inspection-profile button.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }.inspection-profile strong { color:var(--text); font-size:14px; }.inspection-profile span { color:var(--accent); }.inspection-profile small { color:var(--muted); line-height:1.5; }
+.inspection-options { display:grid; gap:10px; padding:14px; border:1px solid var(--line); border-radius:7px; }.inspection-options h3 { margin:0 0 3px; }
 .live-tshark { margin: 0 0 8px; font-size: 10px; line-height: 1.4; }
 .live-tshark.ok { color: var(--good); }
 .live-tshark.missing { color: var(--danger); }

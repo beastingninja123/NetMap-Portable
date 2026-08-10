@@ -1,7 +1,7 @@
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::models::{FlowRecord, ImportProgress, ImportResult};
-use etherparse::{NetSlice, SlicedPacket, TransportSlice};
+use crate::models::{FlowRecord, ImportProgress, ImportResult, PacketRecord, PcapImportOptions};
+use etherparse::{LinkSlice, NetSlice, SlicedPacket, TransportSlice};
 use pcap_parser::{create_reader, Block, Linktype, PcapBlockOwned, PcapError};
 use rusqlite::Connection;
 use std::fs::File;
@@ -16,6 +16,7 @@ pub fn import<F>(
     path: &Path,
     import_id: &str,
     cancelled: &AtomicBool,
+    options: &PcapImportOptions,
     mut report: F,
 ) -> Result<ImportResult>
 where
@@ -32,6 +33,7 @@ where
         path,
         import_id,
         cancelled,
+        options,
         total_bytes,
         &mut report,
     );
@@ -82,6 +84,7 @@ fn import_inner<F>(
     path: &Path,
     import_id: &str,
     cancelled: &AtomicBool,
+    options: &PcapImportOptions,
     total_bytes: Option<u64>,
     report: &mut F,
 ) -> Result<ImportResult>
@@ -139,6 +142,7 @@ where
                                 packet.data,
                                 Some(timestamp),
                                 legacy_linktype.unwrap(),
+                                options,
                             ),
                         )
                     }
@@ -162,7 +166,7 @@ where
                             .and_then(|(linktype, resolution, offset)| {
                                 let timestamp =
                                     (packet.decode_ts_f64(*offset, *resolution) * 1_000.0) as i64;
-                                decode_packet_with_linktype(packet.data, Some(timestamp), *linktype)
+                                decode_packet_with_linktype(packet.data, Some(timestamp), *linktype, options)
                             });
                         (true, decoded)
                     }
@@ -174,7 +178,7 @@ where
                         let linktype = interfaces.first().unwrap().0;
                         (
                             true,
-                            decode_packet_with_linktype(packet.data, None, linktype),
+                            decode_packet_with_linktype(packet.data, None, linktype, options),
                         )
                     }
                     PcapBlockOwned::NG(Block::SimplePacket(_)) => (true, None),
@@ -183,9 +187,14 @@ where
                 consumed = consumed.saturating_add(offset as u64);
                 reader.consume(offset);
                 match decoded {
-                    Some(decoded) => {
+                    Some(mut decoded) => {
+                        if let Some(packet) = decoded.flow.packet.as_mut() {
+                            packet.packet_number = accepted + skipped + 1;
+                        }
                         batch.push(decoded.flow);
-                        hostname_batch.extend(decoded.hostnames);
+                        if options.dns_hostnames {
+                            hostname_batch.extend(decoded.hostnames);
+                        }
                         accepted += 1;
                     }
                     None if packet_seen => skipped += 1,
@@ -247,7 +256,7 @@ pub fn decode_packet_with_hostnames(
     packet: &[u8],
     timestamp: Option<i64>,
 ) -> Option<DecodedPacket> {
-    decode_packet_with_linktype(packet, timestamp, Linktype::ETHERNET)
+    decode_packet_with_linktype(packet, timestamp, Linktype::ETHERNET, &PcapImportOptions::default())
 }
 
 fn supported_linktype(linktype: Linktype) -> bool {
@@ -258,6 +267,7 @@ fn decode_packet_with_linktype(
     packet: &[u8],
     timestamp: Option<i64>,
     linktype: Linktype,
+    options: &PcapImportOptions,
 ) -> Option<DecodedPacket> {
     let sliced = match linktype {
         Linktype::ETHERNET => SlicedPacket::from_ethernet(packet).ok()?,
@@ -277,9 +287,28 @@ fn decode_packet_with_linktype(
         ),
         NetSlice::Arp(_) => return None,
     };
+    let (frame_source_mac, frame_destination_mac) = match sliced.link.as_ref() {
+        Some(LinkSlice::Ethernet2(ethernet)) => (
+            crate::vendor::normalize_mac(ethernet.source()),
+            crate::vendor::normalize_mac(ethernet.destination()),
+        ),
+        _ => (None, None),
+    };
+    let source_mac = match sliced.link.as_ref() {
+        Some(LinkSlice::Ethernet2(ethernet)) if options.mac_addresses && is_local_address(&source_ip) => {
+            crate::vendor::normalize_mac(ethernet.source())
+        }
+        _ => None,
+    };
     let mut hostnames = Vec::new();
+    let mut tcp_flags = None;
     let (source_port, destination_port, protocol) = match sliced.transport {
         Some(TransportSlice::Tcp(tcp)) => {
+            if options.tcp_flags {
+                let flags = [(tcp.syn(), "SYN"), (tcp.ack(), "ACK"), (tcp.fin(), "FIN"), (tcp.rst(), "RST"), (tcp.psh(), "PSH"), (tcp.urg(), "URG")]
+                    .into_iter().filter_map(|(set, name)| set.then_some(name)).collect::<Vec<_>>().join(" ");
+                tcp_flags = (!flags.is_empty()).then_some(flags);
+            }
             (Some(tcp.source_port()), Some(tcp.destination_port()), "TCP")
         }
         Some(TransportSlice::Udp(udp)) => {
@@ -297,18 +326,44 @@ fn decode_packet_with_linktype(
         Some(TransportSlice::Icmpv6(_)) => (None, None, "ICMPV6"),
         _ => (None, None, network_protocol),
     };
+    let packet_record = options.packet_indexing.then(|| PacketRecord {
+        packet_number: 0,
+        timestamp,
+        source_ip: source_ip.clone(),
+        destination_ip: destination_ip.clone(),
+        source_mac: options.mac_addresses.then_some(frame_source_mac).flatten(),
+        destination_mac: options.mac_addresses.then_some(frame_destination_mac).flatten(),
+        source_port,
+        destination_port,
+        protocol: protocol.into(),
+        length: packet.len() as u64,
+        tcp_flags,
+        payload_preview: (options.payload_preview_bytes > 0).then(|| {
+            packet.iter().take(options.payload_preview_bytes.min(256) as usize)
+                .map(|byte| format!("{byte:02X}")).collect::<Vec<_>>().join(" ")
+        }),
+    });
     Some(DecodedPacket {
         flow: FlowRecord {
             source_ip,
             destination_ip,
+            source_mac,
             source_port,
             destination_port,
             protocol: protocol.into(),
             bytes: packet.len() as u64,
             packets: 1,
             timestamp,
+            packet: packet_record,
         },
         hostnames,
+    })
+}
+
+fn is_local_address(value: &str) -> bool {
+    value.parse::<std::net::IpAddr>().is_ok_and(|address| match address {
+        std::net::IpAddr::V4(ip) => ip.is_private() || ip.is_link_local() || ip.is_loopback(),
+        std::net::IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local() || ip.is_loopback(),
     })
 }
 
@@ -423,7 +478,7 @@ mod tests {
 
     fn ipv4_udp_packet() -> Vec<u8> {
         vec![
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0x08, 0x00, // Ethernet
+            0, 1, 2, 3, 4, 5, 0x00, 0x1b, 0x44, 0x11, 0x3a, 0xb7, 0x08, 0x00, // Ethernet
             0x45, 0, 0, 28, 0, 0, 0, 0, 64, 17, 0, 0, 10, 0, 0, 1, 10, 0, 0, 2, // IPv4
             0x1f, 0x90, 0, 53, 0, 8, 0, 0, // UDP
         ]
@@ -453,6 +508,7 @@ mod tests {
         let flow = decode_packet(&ipv4_udp_packet(), Some(42)).unwrap();
         assert_eq!(flow.source_ip, "10.0.0.1");
         assert_eq!(flow.destination_port, Some(53));
+        assert_eq!(flow.source_mac.as_deref(), Some("00:1B:44:11:3A:B7"));
         assert_eq!(flow.protocol, "UDP");
         assert_eq!(flow.timestamp, Some(42));
     }
@@ -508,14 +564,25 @@ mod tests {
         let database =
             std::env::temp_dir().join(format!("netmap-{}.sqlite3", uuid::Uuid::new_v4()));
         let mut connection = crate::db::open(&database).unwrap();
+        let deep_options = PcapImportOptions {
+            packet_indexing: true,
+            tcp_flags: true,
+            payload_preview_bytes: 32,
+            ..PcapImportOptions::default()
+        };
         let result = import(
             &mut connection,
             &path,
             "pcap-test",
             &AtomicBool::new(false),
+            &deep_options,
             |_| {},
         )
         .unwrap();
+        let packet_page = crate::db::query_packets(&connection, 10, 0, None).unwrap();
+        assert_eq!(packet_page.total, 1);
+        assert_eq!(packet_page.packets[0].source_mac.as_deref(), Some("00:1B:44:11:3A:B7"));
+        assert!(packet_page.packets[0].payload_preview.is_some());
         let _ = std::fs::remove_file(path);
         drop(connection);
         let _ = std::fs::remove_file(database);
@@ -549,6 +616,7 @@ mod tests {
                 &capture_root.join(file_name),
                 &format!("real-{file_name}"),
                 &AtomicBool::new(false),
+                &PcapImportOptions::default(),
                 |_| {},
             )
             .unwrap();
@@ -587,6 +655,7 @@ mod tests {
             &path,
             "cancel-test",
             &AtomicBool::new(true),
+            &PcapImportOptions::default(),
             |_| {},
         )
         .unwrap();

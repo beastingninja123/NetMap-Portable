@@ -1,7 +1,7 @@
 {
   "name": "netmap-portable",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Air-gapped, portable network flow visualization for PCAP and Security Onion data.",
   "type": "module",
   "scripts": {
